@@ -1,0 +1,10 @@
+streamlit
+pandas
+openpyxl
+xlsxwriter
+python-dateutil
+hijri-converter
+reportlab
+arabic-reshaper
+python-bidi
+requests
