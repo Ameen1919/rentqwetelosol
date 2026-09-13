@@ -818,6 +818,55 @@ def import_properties_from_excel(f):
         st.toast(f"تم استيراد {add} عقار", icon="✅")
     except Exception as e: st.error(f"خطأ: {e}")
 
+def parse_excel_date(val):
+    """تحويل قيمة التاريخ من Excel (نص/تاريخ/رقم تسلسلي) إلى date"""
+    if val is None or pd.isna(val):
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        try:
+            iv = int(val)
+            if iv <= 0:
+                return None
+            # Excel serial date: origin = 1899-12-30
+            return (datetime(1899, 12, 30) + timedelta(days=iv)).date()
+        except:
+            return None
+    try:
+        d = pd.to_datetime(str(val), errors='coerce')
+        if pd.isna(d):
+            return None
+        return d.date()
+    except:
+        return None
+
+
+def clean_id_value(val):
+    """تنظيف قيم الأرقام (تجاهل 0، 0.0، NaN، نصوص فارغة)"""
+    if val is None or pd.isna(val):
+        return None
+    s = str(val).strip()
+    if s in ("", "0", "0.0", "nan", "NaN", "None"):
+        return None
+    try:
+        return int(float(s))
+    except:
+        return None
+
+
+def clean_text_value(val):
+    """تنظيف النصوص (تجاهل NaN و 0 والأصفار)"""
+    if val is None or pd.isna(val):
+        return ""
+    s = str(val).strip()
+    if s in ("0", "0.0", "nan", "NaN", "None"):
+        return ""
+    return s
+
+
 def import_contracts_from_excel(f):
     try:
         df = pd.read_excel(f, sheet_name=0)
@@ -825,17 +874,21 @@ def import_contracts_from_excel(f):
             if col not in df.columns:
                 st.error(f"يجب أن يحتوي الملف على عمود '{col}'")
                 return
+
         conn = get_conn(); cur = conn.cursor()
         tenants_data = cur.execute("SELECT id, name FROM tenants").fetchall()
         properties_data = cur.execute("SELECT id, name FROM properties").fetchall()
+
         tenant_by_id = {t[0]: t[1] for t in tenants_data}
         prop_by_id = {p[0]: p[1] for p in properties_data}
+
         tenant_name_count = {}
         tenant_name_to_id = {}
         for t in tenants_data:
             tenant_name_count[t[1]] = tenant_name_count.get(t[1], 0) + 1
             if t[1] not in tenant_name_to_id:
                 tenant_name_to_id[t[1]] = t[0]
+
         prop_name_count = {}
         prop_name_to_id = {}
         for p in properties_data:
@@ -850,55 +903,10 @@ def import_contracts_from_excel(f):
 
         for idx, row in df.iterrows():
             try:
-                tid = None
-                if has_tenant_id_col:
-                    tid_val = row.get("رقم المستأجر", None)
-                    if pd.notna(tid_val) and str(tid_val).strip() != "":
-                        try:
-                            tid = int(float(tid_val))
-                            if tid not in tenant_by_id:
-                                errors.append(f"صف {idx+2}: رقم المستأجر {tid} غير موجود")
-                                continue
-                        except:
-                            tid = None
-                if not tid:
-                    tn = str(row["اسم المستأجر"]).strip()
-                    if tn not in tenant_name_to_id:
-                        errors.append(f"صف {idx+2}: المستأجر '{tn}' غير موجود")
-                        continue
-                    if tenant_name_count.get(tn, 0) > 1:
-                        errors.append(f"صف {idx+2}: يوجد {tenant_name_count[tn]} مستأجرين بنفس الاسم '{tn}' — الرجاء استخدام 'رقم المستأجر'")
-                        continue
-                    tid = tenant_name_to_id[tn]
-
-                pid = None
-                if has_prop_id_col:
-                    pid_val = row.get("رقم العقار", None)
-                    if pd.notna(pid_val) and str(pid_val).strip() != "":
-                        try:
-                            pid = int(float(pid_val))
-                            if pid not in prop_by_id:
-                                errors.append(f"صف {idx+2}: رقم العقار {pid} غير موجود")
-                                continue
-                        except:
-                            pid = None
-                if not pid:
-                    pn = str(row["اسم العقار"]).strip()
-                    if pn not in prop_name_to_id:
-                        errors.append(f"صف {idx+2}: العقار '{pn}' غير موجود")
-                        continue
-                    if prop_name_count.get(pn, 0) > 1:
-                        errors.append(f"صف {idx+2}: يوجد {prop_name_count[pn]} عقارات بنفس الاسم '{pn}' — الرجاء استخدام 'رقم العقار'")
-                        continue
-                    pid = prop_name_to_id[pn]
-
-                sd = pd.to_datetime(row["تاريخ البداية"]).date()
-                ed = pd.to_datetime(row["تاريخ النهاية"]).date()
-                if sd >= ed:
-                    errors.append(f"صف {idx+2}: تاريخ البداية بعد النهاية")
-                    continue
-
-                cnum = str(row.get("رقم العقد","")).strip() if "رقم العقد" in df.columns else ""
+                # ========== رقم العقد ==========
+                cnum = ""
+                if "رقم العقد" in df.columns:
+                    cnum = clean_text_value(row.get("رقم العقد", None))
                 if not cnum:
                     cnum = generate_contract_number()
                 else:
@@ -907,12 +915,62 @@ def import_contracts_from_excel(f):
                         errors.append(f"صف {idx+2}: رقم العقد '{cnum}' مكرر — تم تجاهله")
                         continue
 
+                # ========== المستأجر ==========
+                tid = None
+                if has_tenant_id_col:
+                    tid = clean_id_value(row.get("رقم المستأجر", None))
+                    if tid is not None and tid not in tenant_by_id:
+                        errors.append(f"صف {idx+2}: رقم المستأجر {tid} غير موجود")
+                        continue
+
+                if not tid:
+                    tn = clean_text_value(row.get("اسم المستأجر", ""))
+                    if not tn or tn not in tenant_name_to_id:
+                        errors.append(f"صف {idx+2}: المستأجر '{tn}' غير موجود")
+                        continue
+                    if tenant_name_count.get(tn, 0) > 1:
+                        errors.append(f"صف {idx+2}: يوجد {tenant_name_count[tn]} مستأجرين باسم '{tn}' — استخدم 'رقم المستأجر'")
+                        continue
+                    tid = tenant_name_to_id[tn]
+
+                # ========== العقار ==========
+                pid = None
+                if has_prop_id_col:
+                    pid = clean_id_value(row.get("رقم العقار", None))
+                    if pid is not None and pid not in prop_by_id:
+                        errors.append(f"صف {idx+2}: رقم العقار {pid} غير موجود")
+                        continue
+
+                if not pid:
+                    pn = clean_text_value(row.get("اسم العقار", ""))
+                    if not pn or pn not in prop_name_to_id:
+                        errors.append(f"صف {idx+2}: العقار '{pn}' غير موجود")
+                        continue
+                    if prop_name_count.get(pn, 0) > 1:
+                        errors.append(f"صف {idx+2}: يوجد {prop_name_count[pn]} عقارات باسم '{pn}' — استخدم 'رقم العقار'")
+                        continue
+                    pid = prop_name_to_id[pn]
+
+                # ========== التواريخ (مع دعم Excel Serial) ==========
+                sd = parse_excel_date(row.get("تاريخ البداية", None))
+                ed = parse_excel_date(row.get("تاريخ النهاية", None))
+                if sd is None:
+                    errors.append(f"صف {idx+2}: تاريخ البداية غير صحيح أو فارغ")
+                    continue
+                if ed is None:
+                    errors.append(f"صف {idx+2}: تاريخ النهاية غير صحيح أو فارغ")
+                    continue
+                if sd >= ed:
+                    errors.append(f"صف {idx+2}: تاريخ البداية ({sd}) بعد أو يساوي النهاية ({ed})")
+                    continue
+
+                # ========== باقي الحقول ==========
                 ra = safe_float(row.get("قيمة الإيجار السنوي", 0))
                 im = int(row.get("دورية السداد (شهور)", 1)) if "دورية السداد (شهور)" in df.columns else 1
                 da = safe_float(row.get("التأمين", 0))
                 ti = 1 if row.get("شامل الضريبة", False) else 0
                 tr = safe_float(row.get("نسبة الضريبة", 0.15))
-                nt = str(row.get("ملاحظات","")).strip() if "ملاحظات" in df.columns else ""
+                nt = clean_text_value(row.get("ملاحظات", ""))
 
                 cur.execute('''INSERT INTO contracts (tenant_id, property_id, contract_number, start_date, end_date,
                     rent_amount, interval_months, deposit_amount, notes, tax_included, tax_rate)
