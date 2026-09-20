@@ -122,17 +122,46 @@ def parse_date_safe(v, default=None):
         except: return default or date.today()
 
 
-def hijri_to_gregorian(hs):
-    """يحول التاريخ الهجري من نص (dd-mm-yyyy) إلى ميلادي date"""
-    d, m, y = map(int, hs.split('-'))
+def parse_hijri_date(s):
+    if not s or str(s).strip() == "":
+        raise ValueError("تاريخ فارغ")
+    s = str(s).strip().replace('/', '-').replace('.', '-')
+    parts = s.split('-')
+    if len(parts) != 3:
+        raise ValueError(f"صيغة غير صحيحة: {s} — استخدم dd-mm-yyyy أو yyyy-mm-dd")
+    try:
+        nums = [int(p) for p in parts]
+    except:
+        raise ValueError(f"يجب أن يكون التاريخ أرقاماً فقط: {s}")
+    if nums[0] > 1300:
+        y, m, d = nums
+    else:
+        d, m, y = nums
+    if not (1 <= m <= 12): raise ValueError(f"الشهر غير صحيح: {m}")
+    if not (1 <= d <= 30): raise ValueError(f"اليوم غير صحيح: {d}")
+    if not (1300 <= y <= 1600): raise ValueError(f"السنة الهجرية غير صحيحة: {y}")
     g = convert.Hijri(y, m, d).to_gregorian()
     return date(g.year, g.month, g.day)
 
 
+def hijri_to_gregorian(hs):
+    return parse_hijri_date(hs)
+
+
 def gregorian_to_hijri(gd):
-    """يحول التاريخ الميلادي إلى هجري (نص dd-mm-yyyy)"""
+    if not gd: return ""
+    if isinstance(gd, str):
+        gd = parse_date_safe(gd)
     h = convert.Gregorian(gd.year, gd.month, gd.day).to_hijri()
     return f"{h.day:02d}-{h.month:02d}-{h.year}"
+
+
+def add_hijri_months(y, m, d, months):
+    total_months = (y * 12 + (m - 1)) + months
+    new_y = total_months // 12
+    new_m = (total_months % 12) + 1
+    new_d = min(d, 30)
+    return new_y, new_m, new_d
 
 
 def wrap_text_for_pdf(text, max_chars_per_line):
@@ -157,7 +186,12 @@ DATE_COLUMNS = ['تاريخ الاستحقاق','تاريخ السداد','بد�
 
 
 def export_df_to_pdf(df, title, file_name, columns_order=None, extra_info=None, landscape_mode=False):
-    if columns_order: df = df[columns_order]
+    if columns_order:
+        valid_cols = [c for c in columns_order if c in df.columns]
+        if valid_cols:
+            df = df[valid_cols]
+        else:
+            df = df.copy()
     else: df = df.copy()
     df_num = df.copy()
     for c in df_num.columns:
@@ -194,7 +228,7 @@ def export_df_to_pdf(df, title, file_name, columns_order=None, extra_info=None, 
             s = format_currency(v) if isinstance(v, (int, float)) and not pd.isna(v) else (str(v) if not pd.isna(v) else "")
             max_len = max(max_len, len(reshape_arabic_text(s)))
         if col in ['المبلغ','المدفوع','المتبقي','المبلغ شامل الضريبة','مبلغ الضريبة','المبلغ غير شامل الضريبة','الإيجار السنوي','إجمالي المتبقي']: widths.append(95)
-        elif col in DATE_COLUMNS: widths.append(115)
+        elif col in DATE_COLUMNS or 'هجري' in str(col): widths.append(115)
         elif col in ['المستأجر','اسم المستأجر']: widths.append(140)
         elif col in ['العقار','اسم العقار']: widths.append(120)
         elif col in ['المنطقة']: widths.append(80)
@@ -224,7 +258,7 @@ def export_df_to_pdf(df, title, file_name, columns_order=None, extra_info=None, 
             vs = format_currency(v) if isinstance(v, (int, float)) and not pd.isna(v) else (str(v) if not pd.isna(v) else "")
             col_idx = cols.index(col) + 1
             cw = widths[col_idx]
-            if col in DATE_COLUMNS: lines = [vs]
+            if col in DATE_COLUMNS or 'هجري' in str(col): lines = [vs]
             else:
                 max_chars = max(int(cw / 7), 5)
                 lines = wrap_text_for_pdf(vs, max_chars)
@@ -248,7 +282,7 @@ def export_df_to_pdf(df, title, file_name, columns_order=None, extra_info=None, 
             cw = widths[i]; xr = xc; xl = xc - cw
             lines = row_lines[i-1]; start_y = y - 3
             for li, line in enumerate(lines):
-                if col in DATE_COLUMNS: c.setFont(fn, 7)
+                if col in DATE_COLUMNS or 'هجري' in str(col): c.setFont(fn, 7)
                 else: c.setFont(fn, 8)
                 c.drawRightString(xr - 5, start_y - li * line_height, reshape_arabic_text(line))
             c.setFont(fn, 8); xc -= cw
@@ -276,7 +310,12 @@ def export_df_to_pdf(df, title, file_name, columns_order=None, extra_info=None, 
 
 
 def export_tax_pdf(df, title, file_name, columns_order=None, landscape_mode=True):
-    if columns_order: df = df[columns_order]
+    if columns_order:
+        valid_cols = [c for c in columns_order if c in df.columns]
+        if valid_cols:
+            df = df[valid_cols]
+        else:
+            df = df.copy()
     else: df = df.copy()
     df_num = df.copy()
     for c in ['المبلغ شامل الضريبة','مبلغ الضريبة','المبلغ غير شامل الضريبة']:
@@ -697,30 +736,74 @@ def get_annual_rent_for_date(cid, td, default):
     return default
 
 
-def create_payment_schedule(cid, tid, sd, ed, ra, im):
-    step = relativedelta(months=im); cur_d = sd
+def create_payment_schedule(cid, tid, sd, ed, ra, im, calendar_type='ميلادي'):
     conn = get_conn(); cur = conn.cursor(); cnt = 0
-    while cur_d <= ed:
-        ar = get_annual_rent_for_date(cid, cur_d.isoformat(), ra)
-        base = ar * im / 12.0
-        dp, da = calc_discount_for_date(cid, cur_d.isoformat())
-        final = base * (1 - dp / 100.0) - da
-        if final < 0: final = 0
-        cur.execute('INSERT INTO payments (contract_id, tenant_id, due_date, amount) VALUES (?,?,?,?)',
-                    (cid, tid, cur_d.isoformat(), final))
-        cur_d += step; cnt += 1
+    if calendar_type == 'هجري':
+        start_h = gregorian_to_hijri(sd)
+        d_h, m_h, y_h = map(int, start_h.split('-'))
+        cur_y, cur_m, cur_d = y_h, m_h, d_h
+        safety = 0
+        while safety < 500:
+            safety += 1
+            h_str = f"{cur_d:02d}-{cur_m:02d}-{cur_y}"
+            try:
+                g_date = hijri_to_gregorian(h_str)
+            except:
+                break
+            if g_date > ed:
+                break
+            ar_val = get_annual_rent_for_date(cid, g_date.isoformat(), ra)
+            base = ar_val * im / 12.0
+            dp, da = calc_discount_for_date(cid, g_date.isoformat())
+            final = base * (1 - dp / 100.0) - da
+            if final < 0: final = 0
+            cur.execute('INSERT INTO payments (contract_id, tenant_id, due_date, amount) VALUES (?,?,?,?)',
+                        (cid, tid, g_date.isoformat(), final))
+            cnt += 1
+            cur_y, cur_m, cur_d = add_hijri_months(cur_y, cur_m, cur_d, im)
+    else:
+        step = relativedelta(months=im); cur_dt = sd
+        while cur_dt <= ed:
+            ar_val = get_annual_rent_for_date(cid, cur_dt.isoformat(), ra)
+            base = ar_val * im / 12.0
+            dp, da = calc_discount_for_date(cid, cur_dt.isoformat())
+            final = base * (1 - dp / 100.0) - da
+            if final < 0: final = 0
+            cur.execute('INSERT INTO payments (contract_id, tenant_id, due_date, amount) VALUES (?,?,?,?)',
+                        (cid, tid, cur_dt.isoformat(), final))
+            cur_dt += step; cnt += 1
     conn.commit(); conn.close()
     return cnt
 
 
-def create_payment_schedule_inline(cur, cid, tid, sd, ed, ra, im):
-    step = relativedelta(months=im); cur_d = sd
+def create_payment_schedule_inline(cur, cid, tid, sd, ed, ra, im, calendar_type='ميلادي'):
     cnt = 0
-    while cur_d <= ed:
-        base = ra * im / 12.0
-        cur.execute('INSERT INTO payments (contract_id, tenant_id, due_date, amount) VALUES (?,?,?,?)',
-                    (cid, tid, cur_d.isoformat(), base))
-        cur_d += step; cnt += 1
+    if calendar_type == 'هجري':
+        start_h = gregorian_to_hijri(sd)
+        d_h, m_h, y_h = map(int, start_h.split('-'))
+        cur_y, cur_m, cur_d = y_h, m_h, d_h
+        safety = 0
+        while safety < 500:
+            safety += 1
+            h_str = f"{cur_d:02d}-{cur_m:02d}-{cur_y}"
+            try:
+                g_date = hijri_to_gregorian(h_str)
+            except:
+                break
+            if g_date > ed:
+                break
+            base = ra * im / 12.0
+            cur.execute('INSERT INTO payments (contract_id, tenant_id, due_date, amount) VALUES (?,?,?,?)',
+                        (cid, tid, g_date.isoformat(), base))
+            cnt += 1
+            cur_y, cur_m, cur_d = add_hijri_months(cur_y, cur_m, cur_d, im)
+    else:
+        step = relativedelta(months=im); cur_dt = sd
+        while cur_dt <= ed:
+            base = ra * im / 12.0
+            cur.execute('INSERT INTO payments (contract_id, tenant_id, due_date, amount) VALUES (?,?,?,?)',
+                        (cid, tid, cur_dt.isoformat(), base))
+            cur_dt += step; cnt += 1
     return cnt
 
 
@@ -772,7 +855,6 @@ def delete_all_temporary_payments(cid):
 
 
 def get_all_expired_contracts():
-    """عقود منتهية بدون تجديد (المستأجر ليس لديه عقد نشط)"""
     conn = get_conn(); cur = conn.cursor()
     cur.execute('''SELECT c.id, c.contract_number, t.name as tenant_name, c.end_date, c.tenant_id,
                    p.name as prop_name, c.rent_amount, c.interval_months
@@ -785,7 +867,6 @@ def get_all_expired_contracts():
 
 
 def get_expiring_contracts(days=60):
-    """عقود ستنتهي خلال عدد أيام محدد"""
     conn = get_conn(); cur = conn.cursor()
     target = (date.today() + timedelta(days=days)).isoformat()
     cur.execute('''SELECT c.id, c.contract_number, t.name as tenant_name, t.phone as tenant_phone,
@@ -800,45 +881,12 @@ def get_expiring_contracts(days=60):
 
 
 def get_tenant_contracts_history(tid):
-    """سجل جميع عقود المستأجر (حالي وسابق)"""
     conn = get_conn(); cur = conn.cursor()
     cur.execute('''SELECT c.id, c.contract_number, c.start_date, c.end_date, c.rent_amount,
                    c.status, c.calendar_type, c.hijri_start_date, c.hijri_end_date, p.name as prop_name
                    FROM contracts c JOIN properties p ON c.property_id = p.id
                    WHERE c.tenant_id = ? ORDER BY c.start_date DESC''', (tid,))
     r = cur.fetchall(); conn.close(); return [dict(x) for x in r]
-
-
-def get_tenant_all_payments(tid, start_date=None, end_date=None):
-    """جميع دفعات المستأجر من جميع العقود"""
-    conn = get_conn(); cur = conn.cursor()
-    q = '''SELECT pay.id, pay.due_date, pay.amount, pay.paid_amount, (pay.amount-pay.paid_amount) as remaining,
-           pay.status, pay.paid_date, pay.attachment, c.contract_number, c.id as contract_id
-           FROM payments pay JOIN contracts c ON pay.contract_id = c.id
-           WHERE pay.tenant_id = ?'''
-    params = [tid]
-    if start_date:
-        q += " AND pay.due_date >= ?"; params.append(start_date)
-    if end_date:
-        q += " AND pay.due_date <= ?"; params.append(end_date)
-    q += " ORDER BY pay.due_date"
-    cur.execute(q, params)
-    r = cur.fetchall(); conn.close(); return r
-
-
-def get_tenant_all_receipts(tid, start_date=None, end_date=None):
-    """جميع سندات المستأجر"""
-    conn = get_conn(); cur = conn.cursor()
-    q = '''SELECT receipt_number, amount, receipt_date, payment_method, attachment, notes
-           FROM receipts WHERE tenant_id = ?'''
-    params = [tid]
-    if start_date:
-        q += " AND receipt_date >= ?"; params.append(start_date)
-    if end_date:
-        q += " AND receipt_date <= ?"; params.append(end_date)
-    q += " ORDER BY receipt_date"
-    cur.execute(q, params)
-    r = cur.fetchall(); conn.close(); return r
 
 
 def get_total_dues_until(target_date, only_overdue=False):
@@ -1076,7 +1124,7 @@ def import_contracts_from_excel(f):
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
                     (tid, pid, cnum, sd.isoformat(), ed.isoformat(), ra, im, da, nt, ti, tr, 'ميلادي'))
                 cid = cur.lastrowid
-                create_payment_schedule_inline(cur, cid, tid, sd, ed, ra, im)
+                create_payment_schedule_inline(cur, cid, tid, sd, ed, ra, im, 'ميلادي')
                 imp += 1
                 if imp % 10 == 0: conn.commit()
             except Exception as e:
@@ -1149,13 +1197,21 @@ def add_property(n, d, a, r, ar):
     conn.commit(); conn.close(); st.cache_data.clear()
 
 
-def add_contract_full(tid, pid, cn, sd, ed, ra, im, da, ti, tr, nt, fb, calendar_type='ميلادي'):
+def add_contract_full(tid, pid, cn, sd, ed, ra, im, da, ti, tr, nt, fb, calendar_type='ميلادي', previous_balance=0.0):
     conn = get_conn(); cur = conn.cursor()
     if cn:
         ex = cur.execute("SELECT id FROM contracts WHERE contract_number=?", (cn,)).fetchone()
         if ex:
             conn.close(); return False, "رقم العقد مستخدم بالفعل", None
-    else: cn = generate_contract_number()
+    else:
+        cn = generate_contract_number()
+    overlap = cur.execute("""SELECT COUNT(*) FROM contracts 
+                             WHERE tenant_id=? AND status='نشط'
+                             AND NOT (end_date < ? OR start_date > ?)""",
+                          (tid, sd.isoformat(), ed.isoformat())).fetchone()[0]
+    if overlap > 0:
+        conn.close()
+        return False, "⚠️ يوجد عقد نشط متداخل مع هذه الفترة لهذا المستأجر", None
     hs = gregorian_to_hijri(sd) if calendar_type == 'هجري' else None
     he = gregorian_to_hijri(ed) if calendar_type == 'هجري' else None
     cur.execute('''INSERT INTO contracts (tenant_id, property_id, contract_number, start_date, end_date,
@@ -1164,16 +1220,41 @@ def add_contract_full(tid, pid, cn, sd, ed, ra, im, da, ti, tr, nt, fb, calendar
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (tid, pid, cn, sd.isoformat(), ed.isoformat(), ra, im, da, nt, ti, tr, fb, calendar_type, hs, he))
     cid = cur.lastrowid
+    if previous_balance and previous_balance > 0:
+        cur.execute('''INSERT INTO payments (contract_id, tenant_id, due_date, amount, status, notes)
+                       VALUES (?, ?, ?, ?, 'مستحق', 'رصيد سابق مرحّل من عقود قديمة')''',
+                    (cid, tid, sd.isoformat(), previous_balance))
     conn.commit(); conn.close()
-    create_payment_schedule(cid, tid, sd, ed, ra, im)
+    create_payment_schedule(cid, tid, sd, ed, ra, im, calendar_type)
     st.cache_data.clear()
     return True, "تم إنشاء العقد بنجاح", cn
 
 
 def get_active_tenants():
     conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT id, name FROM tenants WHERE id NOT IN (SELECT tenant_id FROM contracts WHERE status='نشط') ORDER BY name")
+    cur.execute("""SELECT id, name FROM tenants 
+                   WHERE id NOT IN (
+                       SELECT tenant_id FROM contracts 
+                       WHERE status='نشط' AND end_date >= date('now')
+                   ) ORDER BY name""")
     r = cur.fetchall(); conn.close(); return [(x[0], x[1]) for x in r]
+
+
+def check_overlapping_contract(tid, sd, ed, exclude_cid=None):
+    conn = get_conn(); cur = conn.cursor()
+    if exclude_cid:
+        cur.execute("""SELECT COUNT(*) FROM contracts 
+                       WHERE tenant_id=? AND status='نشط' AND id != ?
+                       AND NOT (end_date < ? OR start_date > ?)""",
+                    (tid, exclude_cid, sd.isoformat(), ed.isoformat()))
+    else:
+        cur.execute("""SELECT COUNT(*) FROM contracts 
+                       WHERE tenant_id=? AND status='نشط'
+                       AND NOT (end_date < ? OR start_date > ?)""",
+                    (tid, sd.isoformat(), ed.isoformat()))
+    cnt = cur.fetchone()[0]
+    conn.close()
+    return cnt > 0
 
 
 def get_all_tenants():
@@ -1235,6 +1316,30 @@ def update_receipt(rid, rn, tid, cid, pid, amt, rd, pm, nt, att):
                 (rn, tid, cid, pid, amt, rd.isoformat(), pm, nt, att, rid))
     conn.commit(); conn.close(); st.cache_data.clear()
     return True, "تم التعديل"
+
+
+def delete_receipt(rid):
+    conn = get_conn(); cur = conn.cursor()
+    r = cur.execute("SELECT payment_id, amount FROM receipts WHERE id=?", (rid,)).fetchone()
+    if not r:
+        conn.close()
+        return False, "السند غير موجود"
+    pid, amt = r[0], r[1]
+    if pid:
+        pay = cur.execute("SELECT amount, paid_amount FROM payments WHERE id=?", (pid,)).fetchone()
+        if pay:
+            new_paid = max(0, pay[1] - amt)
+            if new_paid >= pay[0]:
+                new_st = "مدفوع"
+            elif new_paid > 0:
+                new_st = "جزئي"
+            else:
+                new_st = "مستحق"
+            cur.execute("UPDATE payments SET paid_amount=?, status=? WHERE id=?", (new_paid, new_st, pid))
+    cur.execute("DELETE FROM receipts WHERE id=?", (rid,))
+    conn.commit(); conn.close()
+    st.cache_data.clear()
+    return True, "تم حذف السند بالكامل"
 
 
 def create_compressed_backup():
@@ -1303,23 +1408,20 @@ if menu == "لوحة التحكم" and has_permission(current_user_id, "لوحة
     c8.metric("⚠️ دفعات متأخرة", f"{count_overdue} دفعة")
     st.markdown("---")
 
-    # ✅ قسم العقود القريبة من الانتهاء مع التفاصيل الكاملة
     st.subheader("⏰ العقود التي ستنتهي خلال 60 يوم")
     expiring = get_expiring_contracts(60)
     if expiring:
         with st.expander(f"🔔 عرض تفاصيل {len(expiring)} عقد قريب على الانتهاء", expanded=True):
             for e in expiring:
                 days_left = e['days_left']
-                if days_left <= 15:
-                    badge = "🔴"
-                elif days_left <= 30:
-                    badge = "🟠"
-                else:
-                    badge = "🟡"
+                if days_left <= 15: badge = "🔴"
+                elif days_left <= 30: badge = "🟠"
+                else: badge = "🟡"
+                hijri_end = gregorian_to_hijri(parse_date_safe(e['end_date']))
                 st.markdown(f"""
                 {badge} **{e['tenant_name']}** — عقد: `{e['contract_number']}`  
                 📞 {e['tenant_phone'] or '-'} | 🏢 {e['prop_name']} | 📍 {e['tenant_region'] or '-'}  
-                📅 ينتهي: **{e['end_date']}** — متبقي **{days_left}** يوم  
+                📅 ينتهي: **{e['end_date']} م** ({hijri_end} هـ) — متبقي **{days_left}** يوم  
                 💰 الإيجار السنوي: {format_currency(e['rent_amount'])} | الدورية: كل {e['interval_months']} شهر
                 """)
                 st.markdown("---")
@@ -1338,7 +1440,16 @@ if menu == "لوحة التحكم" and has_permission(current_user_id, "لوحة
     st.subheader("📅 دفعات خلال 30 يوم")
     if not df_p.empty:
         up = df_p[(df_p["تاريخ الاستحقاق"]>=today.isoformat()) & (df_p["تاريخ الاستحقاق"]<=(today+timedelta(days=30)).isoformat()) & (df_p["الحالة"].isin(["مستحق","جزئي"]))]
-        if not up.empty: rtl_dataframe(up[["المستأجر","العقار","تاريخ الاستحقاق","المبلغ","المدفوع","المتبقي","الحالة"]])
+        if not up.empty:
+            up_disp = up[["المستأجر","العقار","تاريخ الاستحقاق","المبلغ","المدفوع","المتبقي","الحالة"]].copy()
+            up_disp.insert(
+                list(up_disp.columns).index("تاريخ الاستحقاق") + 1,
+                "الاستحقاق (هجري)",
+                up_disp["تاريخ الاستحقاق"].apply(
+                    lambda x: gregorian_to_hijri(parse_date_safe(x)) if x and str(x).strip() else ""
+                )
+            )
+            rtl_dataframe(up_disp)
         else: st.info("لا توجد دفعات")
 
 elif menu == "إدارة البيانات":
@@ -1389,7 +1500,6 @@ elif menu == "إدارة البيانات":
                         if ti:
                             st.markdown(f"**{ti['name']}** - {ti['phone'] or '-'} - {ti['region'] or '-'}")
                             conn.close()
-                            # ✅ سجل كامل بجميع العقود (حالي وسابق)
                             st.markdown("### 📚 سجل العقود الكامل")
                             history = get_tenant_contracts_history(tid)
                             if history:
@@ -1407,7 +1517,6 @@ elif menu == "إدارة البيانات":
                                 st.markdown("---")
                             else:
                                 st.info("لا يوجد سجل عقود لهذا المستأجر")
-                            # إجمالي مديونية كل العقود
                             conn = get_conn(); cur = conn.cursor()
                             total_debt = cur.execute("SELECT COALESCE(SUM(amount - paid_amount), 0) FROM payments WHERE tenant_id=? AND (amount - paid_amount) > 0", (tid,)).fetchone()[0]
                             conn.close()
@@ -1537,13 +1646,13 @@ elif menu == "إدارة البيانات":
             with ci2:
                 uf = st.file_uploader("استيراد", type=["xlsx","xls"], key="imp_c")
                 if uf and st.button("تنفيذ", key="btn_imp_c"): import_contracts_from_excel(uf); st.rerun()
+
             if st.button("➕ إضافة عقد", key="btn_add_c"): st.session_state['show_add_c'] = True
             if st.session_state.get('show_add_c'):
                 at = get_active_tenants()
                 if not at:
-                    st.warning("لا يوجد مستأجرين متاحين")
+                    st.warning("لا يوجد مستأجرين متاحين (كل المستأجرين لديهم عقود سارية)")
                 else:
-                    # ✅ اختيار نوع التقويم خارج الـ form ليتم التحديث فوراً
                     st.markdown("### 📅 نوع التقويم")
                     cal_type = st.radio(
                         "اختر نوع التقويم",
@@ -1567,21 +1676,11 @@ elif menu == "إدارة البيانات":
                                 placeholder="مثال: CTR-2025-001"
                             )
 
-                            # ✅ حقول التاريخ حسب التقويم المختار
                             if cal_type == "هجري":
-                                st.info("📅 أدخل التواريخ بصيغة هجري: **dd-mm-yyyy** — مثال: `01-01-1445`")
+                                st.info("📅 أدخل التواريخ بصيغة هجري: **dd-mm-yyyy** — مثال: `01-10-1445`")
                                 hc1, hc2 = st.columns(2)
-                                hs = hc1.text_input(
-                                    "البداية (هجري)",
-                                    value=gregorian_to_hijri(date.today()),
-                                    key="add_c_hs"
-                                )
-                                he = hc2.text_input(
-                                    "النهاية (هجري)",
-                                    value=gregorian_to_hijri(date.today() + relativedelta(years=1)),
-                                    key="add_c_he"
-                                )
-                                # معاينة التحويل (تظهر دائماً لأن cal_type محدّث)
+                                hs = hc1.text_input("البداية (هجري)", value=gregorian_to_hijri(date.today()), key="add_c_hs")
+                                he = hc2.text_input("النهاية (هجري)", value=gregorian_to_hijri(date.today() + relativedelta(years=1)), key="add_c_he")
                                 try:
                                     sd = hijri_to_gregorian(hs)
                                     ed = hijri_to_gregorian(he)
@@ -1597,6 +1696,11 @@ elif menu == "إدارة البيانات":
                             ra = st.number_input("الإيجار السنوي", min_value=0.0, step=1000.0, value=0.0)
                             im = st.number_input("الدورية (شهور)", min_value=1, value=1)
                             da = st.number_input("التأمين", min_value=0.0, step=100.0, value=0.0)
+                            prev_bal = st.number_input(
+                                "💵 رصيد سابق مُرحّل (مديونية من عقود قديمة)",
+                                min_value=0.0, step=100.0, value=0.0,
+                                help="اتركه 0 لو مفيش مديونية سابقة. لو فيه، هيتسجل كدفعة مستحقة على العقد الجديد."
+                            )
                             ti = st.checkbox("شامل الضريبة")
                             tr = st.number_input("نسبة الضريبة (%)", min_value=0.0, max_value=100.0, value=15.0) / 100
                             nt = st.text_area("ملاحظات")
@@ -1608,13 +1712,15 @@ elif menu == "إدارة البيانات":
                             if s:
                                 if sd >= ed:
                                     st.error("تاريخ النهاية يجب أن يكون بعد البداية")
+                                elif check_overlapping_contract(tid, sd, ed):
+                                    st.error("⚠️ يوجد عقد نشط متداخل مع هذه الفترة لهذا المستأجر — عدّل التواريخ أو أنهِ العقد السابق")
                                 else:
                                     fb = cf.read() if cf else None
                                     ok, msg, final_cn = add_contract_full(
                                         tid, pid,
                                         cn_input.strip() if cn_input.strip() else "",
                                         sd, ed, ra, im, da, 1 if ti else 0, tr, nt, fb,
-                                        cal_type
+                                        cal_type, prev_bal
                                     )
                                     if ok:
                                         st.toast(f"✅ {msg} - رقم العقد: {final_cn}", icon="✅")
@@ -1625,6 +1731,7 @@ elif menu == "إدارة البيانات":
                             if c:
                                 st.session_state['show_add_c'] = False
                                 st.rerun()
+
             st.markdown("---")
             dfc = load_contracts()
             if not dfc.empty:
@@ -1693,7 +1800,8 @@ elif menu == "إدارة البيانات":
                                     conn = get_conn(); cur = conn.cursor()
                                     cur.execute("DELETE FROM payments WHERE contract_id=? AND (is_temporary IS NULL OR is_temporary=0)", (cid,))
                                     conn.commit(); conn.close()
-                                    cnt = create_payment_schedule(cid, ci['tenant_id'], parse_date_safe(ci['start_date']), parse_date_safe(ci['end_date']), ci['rent_amount'], ci['interval_months'])
+                                    cal_t = ci['calendar_type'] if 'calendar_type' in ci.keys() else 'ميلادي'
+                                    cnt = create_payment_schedule(cid, ci['tenant_id'], parse_date_safe(ci['start_date']), parse_date_safe(ci['end_date']), ci['rent_amount'], ci['interval_months'], cal_t or 'ميلادي')
                                     st.toast(f"تم إعادة توليد {cnt} دفعة", icon="✅"); st.rerun()
                             with adv[1]:
                                 st.markdown("#### رسوم إضافية (معفاة من الضريبة افتراضياً)")
@@ -1737,7 +1845,8 @@ elif menu == "إدارة البيانات":
                                     conn = get_conn(); cur = conn.cursor()
                                     cur.execute("DELETE FROM payments WHERE contract_id=? AND (is_temporary IS NULL OR is_temporary=0)", (cid,))
                                     conn.commit(); conn.close()
-                                    cnt = create_payment_schedule(cid, ci['tenant_id'], parse_date_safe(ci['start_date']), parse_date_safe(ci['end_date']), ci['rent_amount'], ci['interval_months'])
+                                    cal_t = ci['calendar_type'] if 'calendar_type' in ci.keys() else 'ميلادي'
+                                    cnt = create_payment_schedule(cid, ci['tenant_id'], parse_date_safe(ci['start_date']), parse_date_safe(ci['end_date']), ci['rent_amount'], ci['interval_months'], cal_t or 'ميلادي')
                                     st.toast(f"تم إعادة توليد {cnt} دفعة", icon="✅"); st.rerun()
                             if current_role == 'مدير':
                                 c1, c2 = st.columns(2)
@@ -1764,7 +1873,10 @@ elif menu == "إدارة البيانات":
                                         nt = st.text_area("ملاحظات", value=cd['notes'] or "")
                                         nf = st.file_uploader("ملف جديد", type=["pdf"])
                                         if st.form_submit_button("حفظ"):
-                                            if sd >= ed: st.error("تواريخ خاطئة")
+                                            if sd >= ed:
+                                                st.error("تواريخ خاطئة")
+                                            elif check_overlapping_contract(tid, sd, ed, exclude_cid=cid):
+                                                st.error("⚠️ يوجد عقد نشط آخر متداخل مع هذه الفترة لهذا المستأجر")
                                             else:
                                                 fb = cd['contract_file']
                                                 if nf: fb = nf.read()
@@ -1775,7 +1887,8 @@ elif menu == "إدارة البيانات":
                                                     (tid, pid, cn, sd.isoformat(), ed.isoformat(), ra, im, da, 1 if ti else 0, tr, nt, fb, cid))
                                                 cur.execute("DELETE FROM payments WHERE contract_id=? AND (is_temporary IS NULL OR is_temporary=0)", (cid,))
                                                 conn.commit(); conn.close()
-                                                cnt = create_payment_schedule(cid, tid, sd, ed, ra, im)
+                                                cal_t = cd['calendar_type'] if 'calendar_type' in cd.keys() else 'ميلادي'
+                                                cnt = create_payment_schedule(cid, tid, sd, ed, ra, im, cal_t or 'ميلادي')
                                                 st.cache_data.clear(); st.toast(f"تم التحديث ({cnt} دفعة)", icon="✅")
                                                 st.session_state['edit_contract_id'] = None; st.rerun()
                 else: st.info("لا عقود")
@@ -1805,7 +1918,23 @@ elif menu == "الدفعات":
                 sq = st.text_input("بحث", key="ps_")
                 f = dfp_f[dfp_f["المستأجر"].str.contains(sq, case=False, na=False)] if sq else dfp_f
                 if not f.empty:
-                    f_disp = f.drop(columns=["المرفق","معرف_المستأجر"])
+                    f_disp = f.drop(columns=["المرفق","معرف_المستأجر"]).copy()
+                    if "تاريخ الاستحقاق" in f_disp.columns:
+                        f_disp.insert(
+                            list(f_disp.columns).index("تاريخ الاستحقاق") + 1,
+                            "الاستحقاق (هجري)",
+                            f_disp["تاريخ الاستحقاق"].apply(
+                                lambda x: gregorian_to_hijri(parse_date_safe(x)) if x and str(x).strip() else ""
+                            )
+                        )
+                    if "تاريخ السداد" in f_disp.columns:
+                        f_disp.insert(
+                            list(f_disp.columns).index("تاريخ السداد") + 1,
+                            "السداد (هجري)",
+                            f_disp["تاريخ السداد"].apply(
+                                lambda x: gregorian_to_hijri(parse_date_safe(x)) if x and str(x).strip() else ""
+                            )
+                        )
                     display_dataframe_with_reorder(f_disp, "payments")
                     st.markdown("### 📄 خيارات الطباعة")
                     orient1 = st.radio("اتجاه الصفحة", ["عمودي (Portrait)", "أفقي (Landscape)"], horizontal=True, key="pay_orient")
@@ -1877,13 +2006,30 @@ elif menu == "سندات القبض":
         t1, t2 = st.tabs(["تسجيل سداد","سجل السندات"])
         with t1:
             if current_role in ['مدير','محاسب']:
-                dft = load_tenants()
-                if dft.empty:
+                all_tenants_for_pay = load_tenants()
+                if all_tenants_for_pay.empty:
                     st.warning("لا مستأجرين")
                 else:
-                    tid = st.selectbox("المستأجر", dft["الرقم"], format_func=lambda x: dft[dft["الرقم"]==x]["الاسم"].iloc[0], key="sel_tenant_pay")
+                    f1, f2 = st.columns(2)
+                    with f1:
+                        regions_pay = ["الكل"] + sorted([r for r in all_tenants_for_pay["المنطقة"].dropna().unique().tolist() if r])
+                        sel_region_pay = st.selectbox("🔽 المنطقة", regions_pay, key="pay_reg_filter")
+                    with f2:
+                        if sel_region_pay != "الكل":
+                            tenants_filtered = all_tenants_for_pay[all_tenants_for_pay["المنطقة"] == sel_region_pay]
+                        else:
+                            tenants_filtered = all_tenants_for_pay
+                        if tenants_filtered.empty:
+                            st.warning("لا مستأجرين في هذه المنطقة")
+                            st.stop()
+                        tid = st.selectbox(
+                            "🔽 المستأجر",
+                            tenants_filtered["الرقم"],
+                            format_func=lambda x: tenants_filtered[tenants_filtered["الرقم"]==x]["الاسم"].iloc[0],
+                            key="sel_tenant_pay"
+                        )
+
                     today = date.today()
-                    # ✅ خيار عرض الدفعات المقدمة (المستقبلية) وأيضاً غير المسددة
                     show_advance = st.checkbox("🔮 عرض جميع الدفعات غير المسددة (بما فيها الدفعات المستقبلية - دفعات مقدمة)",
                                                value=False, key="show_advance_chk",
                                                help="عند التفعيل: يعرض كل الدفعات غير المسددة حتى المستقبلية لتسجيل دفعة مقدمة")
@@ -1901,12 +2047,10 @@ elif menu == "سندات القبض":
 
                     conn = get_conn(); cur = conn.cursor()
                     if show_advance:
-                        # جميع الدفعات غير المسددة (حتى المستقبلية)
                         dues = cur.execute('''SELECT id, due_date, amount, paid_amount, (amount - paid_amount) as remaining, contract_id
                             FROM payments WHERE tenant_id=? AND status != 'مدفوع' AND (amount - paid_amount) > 0 ORDER BY due_date''',
                             (tid,)).fetchall()
                     else:
-                        # فقط المستحقة حتى اليوم
                         dues = cur.execute('''SELECT id, due_date, amount, paid_amount, (amount - paid_amount) as remaining, contract_id
                             FROM payments WHERE tenant_id=? AND status != 'مدفوع' AND due_date <= ? AND (amount - paid_amount) > 0 ORDER BY due_date''',
                             (tid, today.isoformat())).fetchall()
@@ -1915,16 +2059,29 @@ elif menu == "سندات القبض":
                         st.info("لا دفعات مستحقة")
                     else:
                         dfd = pd.DataFrame(dues, columns=["رقم الدفعة","الاستحقاق","المبلغ","المدفوع","المتبقي","رقم العقد"])
-                        rtl_dataframe(dfd.drop(columns=["رقم العقد"]))
-                        pid = st.selectbox("الدفعة", dfd["رقم الدفعة"].tolist(),
-                                          format_func=lambda x: f"دفعة {x} - استحقاق: {dfd[dfd['رقم الدفعة']==x]['الاستحقاق'].iloc[0]}",
-                                          key="sel_pay_pay")
+                        dfd["الاستحقاق (هجري)"] = dfd["الاستحقاق"].apply(
+                            lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else ""
+                        )
+                        dfd_show = dfd[["رقم الدفعة","الاستحقاق","الاستحقاق (هجري)","المبلغ","المدفوع","المتبقي"]]
+                        rtl_dataframe(dfd_show)
+                        pid = st.selectbox(
+                            "الدفعة",
+                            dfd["رقم الدفعة"].tolist(),
+                            format_func=lambda x: (
+                                f"دفعة {x} — ميلادي: {dfd[dfd['رقم الدفعة']==x]['الاستحقاق'].iloc[0]} — "
+                                f"هجري: {dfd[dfd['رقم الدفعة']==x]['الاستحقاق (هجري)'].iloc[0]}"
+                            ),
+                            key="sel_pay_pay"
+                        )
                         if pid:
                             od = [d for d in dues if d[0]==pid][0]
                             rem = od[4]; due_dt = od[1]
                             is_advance = due_dt > today.isoformat()
+                            hijri_due = gregorian_to_hijri(parse_date_safe(due_dt))
                             if is_advance:
-                                st.success(f"🔮 **هذه دفعة مقدمة** (الاستحقاق في المستقبل: {due_dt})")
+                                st.success(f"🔮 **هذه دفعة مقدمة** — الاستحقاق: **{due_dt} م** ({hijri_due} هـ)")
+                            else:
+                                st.info(f"📅 **الاستحقاق:** {due_dt} م ({hijri_due} هـ)")
                             pdte = st.date_input("تاريخ السداد", value=today, key="pay_date_in")
                             am = st.number_input("المبلغ", min_value=0.0, max_value=float(rem), value=float(rem), step=100.0, key="pay_amt_in")
                             mt = st.selectbox("طريقة الدفع", ["نقدي","تحويل بنكي","شيك","دفع في المنصة"], key="pay_mt_in")
@@ -1955,16 +2112,19 @@ elif menu == "سندات القبض":
                 st.markdown("### 🔎 فلاتر البحث")
                 f1, f2, f3 = st.columns(3)
                 with f1:
-                    tenant_names = ["الكل"] + sorted(dfr["المستأجر"].dropna().unique().tolist())
-                    sel_tenant = st.selectbox("المستأجر", tenant_names, key="flt_rec_tenant")
-                with f2:
                     regions = ["الكل"] + sorted([r for r in dfr["المنطقة"].dropna().unique().tolist() if r])
                     sel_region = st.selectbox("المنطقة", regions, key="flt_rec_region")
+                with f2:
+                    if sel_region != "الكل":
+                        tenants_in_region = sorted(dfr[dfr["المنطقة"] == sel_region]["المستأجر"].dropna().unique().tolist())
+                    else:
+                        tenants_in_region = sorted(dfr["المستأجر"].dropna().unique().tolist())
+                    sel_tenant = st.selectbox("المستأجر", ["الكل"] + tenants_in_region, key="flt_rec_tenant")
                 with f3:
                     search_txt = st.text_input("بحث", key="flt_rec_search")
                 dfr_f = dfr.copy()
-                if sel_tenant != "الكل": dfr_f = dfr_f[dfr_f["المستأجر"] == sel_tenant]
                 if sel_region != "الكل": dfr_f = dfr_f[dfr_f["المنطقة"] == sel_region]
+                if sel_tenant != "الكل": dfr_f = dfr_f[dfr_f["المستأجر"] == sel_tenant]
                 if search_txt.strip():
                     mask = dfr_f.apply(lambda row: search_txt.lower() in str(row.get("رقم السند","")).lower() or
                                                   search_txt.lower() in str(row.get("ملاحظات","") or "").lower(), axis=1)
@@ -1990,8 +2150,20 @@ elif menu == "سندات القبض":
                                                   mime="application/octet-stream", key=f"dl_att_{rid}")
                         with c3:
                             if current_role == 'مدير':
-                                if st.button("تعديل السند", key=f"btn_ed_r_{rid}"):
-                                    st.session_state['edit_receipt_id'] = rid; st.rerun()
+                                cc1, cc2 = st.columns(2)
+                                with cc1:
+                                    if st.button("✏️ تعديل", key=f"btn_ed_r_{rid}", use_container_width=True):
+                                        st.session_state['edit_receipt_id'] = rid; st.rerun()
+                                with cc2:
+                                    if st.button("🗑️ حذف", key=f"btn_del_r_{rid}", use_container_width=True):
+                                        ok, msg = delete_receipt(rid)
+                                        if ok:
+                                            st.toast(msg, icon="🗑️")
+                                            if 'edit_receipt_id' in st.session_state:
+                                                del st.session_state['edit_receipt_id']
+                                            st.rerun()
+                                        else:
+                                            st.error(msg)
                         if st.session_state.get('edit_receipt_id') == rid and current_role == 'مدير':
                             rd = get_receipt_details(rid)
                             if rd:
@@ -2131,18 +2303,26 @@ elif menu == "التقارير":
                     c1, c2 = st.columns(2)
                     with c1:
                         if cc == "هجري":
-                            hi = st.text_input("من هجري", "01-01-1445", key="kr_h1")
-                            try: fd = hijri_to_gregorian(hi)
-                            except: st.error("خطأ"); st.stop()
+                            hi = st.text_input("من هجري (dd-mm-yyyy)", "01-01-1445", key="kr_h1")
+                            try:
+                                fd = hijri_to_gregorian(hi)
+                                st.caption(f"✅ الميلادي: **{fd}**")
+                            except Exception as e:
+                                st.error(f"⚠️ {e}"); st.stop()
                         else:
                             fd = st.date_input("من", value=date.today().replace(day=1), key="kr_d1")
                     with c2:
                         if cc == "هجري":
-                            hi2 = st.text_input("إلى هجري", "30-12-1445", key="kr_h2")
-                            try: td = hijri_to_gregorian(hi2)
-                            except: st.error("خطأ"); st.stop()
+                            hi2 = st.text_input("إلى هجري (dd-mm-yyyy)", "30-12-1445", key="kr_h2")
+                            try:
+                                td = hijri_to_gregorian(hi2)
+                                st.caption(f"✅ الميلادي: **{td}**")
+                            except Exception as e:
+                                st.error(f"⚠️ {e}"); st.stop()
                         else:
                             td = st.date_input("إلى", value=date.today(), key="kr_d2")
+                    if cc == "هجري":
+                        st.info(f"📆 **الفترة (ميلادي):** من **{fd}** إلى **{td}**")
 
                     include_past = st.checkbox(
                         "☑️ تضمين الدفعات المتأخرة قبل بداية الفترة",
@@ -2157,13 +2337,10 @@ elif menu == "التقارير":
                         tn, tr = tn_row
                         cr = cur.execute("SELECT c.contract_number FROM contracts c WHERE c.tenant_id=? AND c.status='نشط' LIMIT 1", (tid,)).fetchone()
                         cno = cr[0] if cr else "لا يوجد"
-                        # ✅ سجل كامل بجميع العقود
                         all_contracts = cur.execute("SELECT contract_number, start_date, end_date, status FROM contracts WHERE tenant_id=? ORDER BY start_date DESC", (tid,)).fetchall()
-                        # ✅ جلب السندات
                         recs = cur.execute('''SELECT receipt_number, amount, receipt_date, payment_method, attachment
                             FROM receipts WHERE tenant_id=? AND receipt_date BETWEEN ? AND ? ORDER BY receipt_date''',
                             (tid, fd.isoformat(), td.isoformat())).fetchall()
-                        # ✅ استعلام مشروط للدفعات - من جميع العقود
                         if include_past:
                             pays = cur.execute('''SELECT pay.id, pay.due_date, pay.amount, pay.paid_amount, (pay.amount-pay.paid_amount), 
                                 pay.status, pay.paid_date, pay.attachment, c.contract_number
@@ -2181,7 +2358,6 @@ elif menu == "التقارير":
                         st.write(f"**المنطقة:** {tr or '-'} | **العقد الحالي:** {cno}")
                         st.write(f"**الفترة:** {fd} - {td}")
 
-                        # ✅ عرض سجل جميع العقود
                         if all_contracts:
                             with st.expander(f"📚 سجل العقود ({len(all_contracts)} عقد)", expanded=False):
                                 for ac in all_contracts:
@@ -2190,6 +2366,17 @@ elif menu == "التقارير":
 
                         if pays:
                             dfp = pd.DataFrame(pays, columns=["رقم الدفعة","الاستحقاق","المبلغ","المدفوع","المتبقي","الحالة","تاريخ السداد","المرفق","رقم العقد"])
+                            if cc == "هجري":
+                                dfp["الاستحقاق (هجري)"] = dfp["الاستحقاق"].apply(
+                                    lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else ""
+                                )
+                                dfp["تاريخ السداد (هجري)"] = dfp["تاريخ السداد"].apply(
+                                    lambda x: gregorian_to_hijri(parse_date_safe(x)) if x and str(x).strip() else ""
+                                )
+                                dfp = dfp[[
+                                    "رقم الدفعة","الاستحقاق","الاستحقاق (هجري)","المبلغ","المدفوع","المتبقي",
+                                    "الحالة","تاريخ السداد","تاريخ السداد (هجري)","المرفق","رقم العقد"
+                                ]]
                             rtl_dataframe(dfp.drop(columns=["المرفق"]))
                             ta = sum(p[2] for p in pays); tp_ = sum(p[3] for p in pays)
                             st.write(f"**إجمالي المستحق:** {format_currency(ta)}")
@@ -2199,13 +2386,20 @@ elif menu == "التقارير":
                             st.info("لا دفعات في هذه الفترة")
                         if recs:
                             dfr = pd.DataFrame(recs, columns=["رقم السند","المبلغ","التاريخ","الطريقة","المرفق"])
+                            if cc == "هجري":
+                                dfr["التاريخ (هجري)"] = dfr["التاريخ"].apply(
+                                    lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else ""
+                                )
+                                dfr = dfr[["رقم السند","المبلغ","التاريخ","التاريخ (هجري)","الطريقة","المرفق"]]
                             st.markdown("### 🧾 سندات القبض")
                             rtl_dataframe(dfr.drop(columns=["المرفق"]))
-                        # ✅ التصدير حتى لو لا يوجد pays - يعتمد على recs + معلومات
                         if pays or recs:
                             if pays:
-                                dfe = pd.DataFrame([(p[1],p[2],p[3],p[2]-p[3],p[5],p[6],p[8]) for p in pays],
-                                                   columns=["الاستحقاق","المبلغ","المدفوع","المتبقي","الحالة","تاريخ السداد","رقم العقد"])
+                                base_cols = ["الاستحقاق","المبلغ","المدفوع","المتبقي","الحالة","تاريخ السداد","رقم العقد"]
+                                dfe = pd.DataFrame([(p[1],p[2],p[3],p[2]-p[3],p[5],p[6],p[8]) for p in pays], columns=base_cols)
+                                if cc == "هجري":
+                                    dfe.insert(1, "الاستحقاق (هجري)", dfe["الاستحقاق"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else ""))
+                                    dfe.insert(6, "تاريخ السداد (هجري)", dfe["تاريخ السداد"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x and str(x).strip() else ""))
                             else:
                                 dfe = pd.DataFrame(columns=["الاستحقاق","المبلغ","المدفوع","المتبقي","الحالة","تاريخ السداد","رقم العقد"])
                             o = io.BytesIO()
@@ -2228,10 +2422,13 @@ elif menu == "التقارير":
             st.markdown("### تقرير الدفعات بين تاريخين")
             if cc == "هجري":
                 c1, c2 = st.columns(2)
-                hi1 = c1.text_input("من هجري", "01-01-1445", key="dd_h1")
-                hi2 = c2.text_input("إلى هجري", "30-12-1445", key="dd_h2")
-                try: fd = hijri_to_gregorian(hi1); td = hijri_to_gregorian(hi2)
-                except: st.error("خطأ"); st.stop()
+                hi1 = c1.text_input("من هجري (dd-mm-yyyy)", "01-01-1445", key="dd_h1")
+                hi2 = c2.text_input("إلى هجري (dd-mm-yyyy)", "30-12-1445", key="dd_h2")
+                try:
+                    fd = hijri_to_gregorian(hi1); td = hijri_to_gregorian(hi2)
+                    st.success(f"✅ الفترة الميلادية المقابلة: من **{fd}** إلى **{td}**")
+                except Exception as e:
+                    st.error(f"⚠️ {e}"); st.stop()
             else:
                 c1, c2 = st.columns(2)
                 fd = c1.date_input("من", value=date.today().replace(day=1), key="dd_d1")
@@ -2252,25 +2449,36 @@ elif menu == "التقارير":
             cur.execute(q, pr); dues = cur.fetchall(); conn.close()
             if dues:
                 df = pd.DataFrame(dues, columns=["المستأجر","العقار","الاستحقاق","المبلغ","المدفوع","المتبقي","الحالة","المنطقة","رقم العقد"])
-                display_dataframe_with_reorder(df.copy(), "rp")
+                if cc == "هجري":
+                    df.insert(3, "الاستحقاق (هجري)", df["الاستحقاق"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else ""))
+                df_selected, selected_cols = display_dataframe_with_reorder(df.copy(), "rp")
                 ta = sum(d[3] for d in dues); tp_ = sum(d[4] for d in dues); tr_ = sum(d[5] for d in dues)
                 c1, c2, c3 = st.columns(3)
                 c1.metric("إجمالي المستحق", format_currency(ta))
                 c2.metric("إجمالي المدفوع", format_currency(tp_))
                 c3.metric("إجمالي المتبقي", format_currency(tr_))
                 o = io.BytesIO()
-                with pd.ExcelWriter(o, engine='xlsxwriter') as wr: df.to_excel(wr, index=False)
+                with pd.ExcelWriter(o, engine='xlsxwriter') as wr:
+                    df_selected.to_excel(wr, index=False)
                 st.download_button("تحميل Excel", data=o.getvalue(), file_name=f"dues_{fd}_{td}.xlsx", key="dl_dues")
                 title_txt = "المستحقات" if only_dues else "الدفعات"
-                export_df_to_pdf(df, f"{title_txt} من {fd} إلى {td}", f"dues_{fd}_{td}.pdf", landscape_mode=landscape_choice)
+                export_df_to_pdf(
+                    df_selected, f"{title_txt} من {fd} إلى {td}",
+                    f"dues_{fd}_{td}.pdf",
+                    columns_order=selected_cols,
+                    landscape_mode=landscape_choice
+                )
             else:
                 st.info("لا مستحقات في هذه الفترة" if only_dues else "لا دفعات في هذه الفترة")
         elif rt == "الإيرادات":
             if cc == "هجري":
                 c1, c2 = st.columns(2)
-                hi1 = c1.text_input("من هجري", "01-01-1445", key="rev_h1"); hi2 = c2.text_input("إلى هجري", "30-12-1445", key="rev_h2")
-                try: fd = hijri_to_gregorian(hi1); td = hijri_to_gregorian(hi2)
-                except: st.error("خطأ"); st.stop()
+                hi1 = c1.text_input("من هجري (dd-mm-yyyy)", "01-01-1445", key="rev_h1"); hi2 = c2.text_input("إلى هجري (dd-mm-yyyy)", "30-12-1445", key="rev_h2")
+                try:
+                    fd = hijri_to_gregorian(hi1); td = hijri_to_gregorian(hi2)
+                    st.success(f"✅ الفترة الميلادية: من **{fd}** إلى **{td}**")
+                except Exception as e:
+                    st.error(f"⚠️ {e}"); st.stop()
             else:
                 c1, c2 = st.columns(2)
                 fd = c1.date_input("من", value=date.today().replace(day=1), key="rev_d1"); td = c2.date_input("إلى", value=date.today(), key="rev_d2")
@@ -2282,19 +2490,29 @@ elif menu == "التقارير":
                 conn, params=(fd.isoformat(), td.isoformat()))
             conn.close()
             if not df.empty:
-                display_dataframe_with_reorder(df.copy(), "rev")
+                if cc == "هجري":
+                    df.insert(1, "التاريخ (هجري)", df["التاريخ"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else ""))
+                df_selected, selected_cols = display_dataframe_with_reorder(df.copy(), "rev")
                 st.write(f"**الإجمالي:** {format_currency(df['المبلغ'].sum())}")
                 o = io.BytesIO()
-                with pd.ExcelWriter(o, engine='xlsxwriter') as wr: df.to_excel(wr, index=False)
+                with pd.ExcelWriter(o, engine='xlsxwriter') as wr:
+                    df_selected.to_excel(wr, index=False)
                 st.download_button("Excel", data=o.getvalue(), file_name=f"rev_{fd}_{td}.xlsx", key="dl_rev")
-                export_df_to_pdf(df, "الإيرادات", f"rev_{fd}_{td}.pdf", landscape_mode=landscape_choice)
+                export_df_to_pdf(
+                    df_selected, "الإيرادات", f"rev_{fd}_{td}.pdf",
+                    columns_order=selected_cols,
+                    landscape_mode=landscape_choice
+                )
             else: st.info("لا إيرادات")
         elif rt == "الضرائب":
             if cc == "هجري":
                 c1, c2 = st.columns(2)
-                hi1 = c1.text_input("من هجري", "01-01-1445", key="tx_h1"); hi2 = c2.text_input("إلى هجري", "30-12-1445", key="tx_h2")
-                try: fd = hijri_to_gregorian(hi1); td = hijri_to_gregorian(hi2)
-                except: st.error("خطأ"); st.stop()
+                hi1 = c1.text_input("من هجري (dd-mm-yyyy)", "01-01-1445", key="tx_h1"); hi2 = c2.text_input("إلى هجري (dd-mm-yyyy)", "30-12-1445", key="tx_h2")
+                try:
+                    fd = hijri_to_gregorian(hi1); td = hijri_to_gregorian(hi2)
+                    st.success(f"✅ الفترة الميلادية: من **{fd}** إلى **{td}**")
+                except Exception as e:
+                    st.error(f"⚠️ {e}"); st.stop()
             else:
                 c1, c2 = st.columns(2)
                 fd = c1.date_input("من", value=date.today().replace(day=1), key="tx_d1"); td = c2.date_input("إلى", value=date.today(), key="tx_d2")
@@ -2333,12 +2551,13 @@ elif menu == "التقارير":
             st.markdown("#### 📅 فترة التقرير")
             if cc == "هجري":
                 c1, c2 = st.columns(2)
-                hi1 = c1.text_input("من تاريخ هجري", "01-01-1445", key="due_h1")
-                hi2 = c2.text_input("إلى تاريخ هجري", "30-12-1445", key="due_h2")
+                hi1 = c1.text_input("من تاريخ هجري (dd-mm-yyyy)", "01-01-1445", key="due_h1")
+                hi2 = c2.text_input("إلى تاريخ هجري (dd-mm-yyyy)", "30-12-1445", key="due_h2")
                 try:
                     fd_due = hijri_to_gregorian(hi1); td_due = hijri_to_gregorian(hi2)
-                except:
-                    st.error("صيغة التاريخ الهجري غير صحيحة"); st.stop()
+                    st.success(f"✅ الفترة الميلادية: من **{fd_due}** إلى **{td_due}**")
+                except Exception as e:
+                    st.error(f"⚠️ {e}"); st.stop()
             else:
                 c1, c2 = st.columns(2)
                 fd_due = c1.date_input("من تاريخ", value=date.today().replace(day=1), key="due_d1")
@@ -2377,6 +2596,8 @@ elif menu == "التقارير":
                     'total_remaining': 'إجمالي المتبقي'
                 })
                 df_due_display = df_due_display[['المستأجر','المنطقة','أقدم دفعة غير مسددة','عدد الدفعات المستحقة','عدد الدفعات المتأخرة','إجمالي المتبقي']]
+                if cc == "هجري":
+                    df_due_display.insert(3, "أقدم دفعة (هجري)", df_due_display["أقدم دفعة غير مسددة"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else ""))
                 df_selected, selected_cols = display_dataframe_with_reorder(df_due_display, "due_report_table")
                 st.markdown("---")
                 c1, c2, c3, c4 = st.columns(4)
