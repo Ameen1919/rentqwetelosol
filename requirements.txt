@@ -1,10 +1,10 @@
 streamlit
 pandas
-openpyxl
-xlsxwriter
-python-dateutil
+requests
 hijri-converter
 reportlab
 arabic-reshaper
 python-bidi
-requests
+xlsxwriter
+numpy
+python-dateutil
