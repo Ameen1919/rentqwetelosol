@@ -8,3 +8,4 @@ python-bidi
 xlsxwriter
 numpy
 python-dateutil
+openpyxl

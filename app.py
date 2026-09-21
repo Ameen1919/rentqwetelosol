@@ -20,15 +20,21 @@ import base64
 import hashlib
 import json
 import numpy as np
+import traceback
 
 st.set_page_config(page_title="نظام إدارة الإيجارات", page_icon="🏢", layout="wide")
 
+# ============================================================
+# RTL + Wafeq-like Sidebar Styling
+# ============================================================
 st.markdown("""
 <style>
+    /* ===== RTL الأساسي ===== */
     html, body, [class*="css"] { direction: rtl !important; text-align: right !important; }
     .stApp { direction: rtl !important; }
-    .stSidebar { direction: rtl !important; text-align: right !important; }
-    .stButton, .stSelectbox, .stTextInput, .stNumberInput, .stDateInput, .stRadio, .stCheckbox { direction: rtl !important; text-align: right !important; }
+    .stButton, .stSelectbox, .stTextInput, .stNumberInput, .stDateInput, .stRadio, .stCheckbox {
+        direction: rtl !important; text-align: right !important;
+    }
     h1, h2, h3, h4, h5, h6 { direction: rtl !important; text-align: right !important; }
     .stTabs [data-baseweb="tab-list"] { direction: rtl !important; }
     input, textarea { direction: rtl !important; text-align: right !important; }
@@ -38,13 +44,99 @@ st.markdown("""
     [data-testid="stMetric"] { direction: rtl !important; text-align: right !important; }
     [data-testid="stDataFrame"] { direction: ltr !important; }
     [data-testid="stDataFrame"] [role="columnheader"] { text-align: center !important; }
+
+    /* ===== Sidebar زي Wafeq ===== */
+    [data-testid="stSidebar"] {
+        direction: rtl !important;
+        text-align: right !important;
+    }
+    
+    /* زر القفل — نقله لليمين + شكل RTL */
+    [data-testid="stSidebarCollapseButton"],
+    button[data-testid="baseButton-headerNoPadding"] {
+        position: absolute !important;
+        right: 12px !important;
+        left: auto !important;
+        top: 12px !important;
+        z-index: 999 !important;
+    }
+    
+    /* عكس اتجاه السهم */
+    [data-testid="stSidebarCollapseButton"] svg,
+    button[data-testid="baseButton-headerNoPadding"] svg {
+        transform: scaleX(-1) !important;
+    }
+    
+    /* الزر أوضح لما الشريط مفتوح */
+    [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarCollapseButton"] {
+        background-color: rgba(255, 255, 255, 0.2) !important;
+        border-radius: 8px !important;
+        padding: 4px !important;
+        transition: background-color 0.2s ease !important;
+    }
+    
+    /* الزر لما الشريط مقفول */
+    section[data-testid="stSidebar"][aria-expanded="false"] + section [data-testid="stSidebarCollapseButton"],
+    [data-testid="collapsedControl"] {
+        position: fixed !important;
+        top: 12px !important;
+        right: 12px !important;
+        left: auto !important;
+        background-color: #4A90E2 !important;
+        border-radius: 8px !important;
+        padding: 8px 12px !important;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
+        z-index: 9999 !important;
+        transition: all 0.2s ease !important;
+    }
+    
+    [data-testid="collapsedControl"] svg {
+        transform: scaleX(-1) !important;
+        color: white !important;
+    }
+    
+    [data-testid="collapsedControl"]:hover {
+        background-color: #357ABD !important;
+        transform: scale(1.05) !important;
+    }
+    
+    [data-testid="stSidebar"] > div:first-child {
+        padding-top: 10px !important;
+    }
+    
+    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child {
+        padding-top: 30px !important;
+    }
+    
+    /* عناصر القائمة */
+    [data-testid="stSidebar"] .stRadio > label {
+        padding: 8px 12px !important;
+        border-radius: 6px !important;
+        transition: background-color 0.2s ease !important;
+        display: block !important;
+        margin-bottom: 4px !important;
+    }
+    
+    [data-testid="stSidebar"] .stRadio > label:hover {
+        background-color: rgba(255, 255, 255, 0.15) !important;
+    }
+    
+    [data-testid="stSidebar"] .stRadio > label:has(input:checked) {
+        background-color: rgba(255, 255, 255, 0.25) !important;
+        font-weight: bold !important;
+    }
+    
+    [data-testid="stSidebar"] .stRadio label p {
+        display: inline !important;
+        margin: 0 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 
-# =====================================================
+# ============================================================
 # Config
-# =====================================================
+# ============================================================
 try:
     TURSO_URL = st.secrets["TURSO_URL"]
     TURSO_TOKEN = st.secrets["TURSO_TOKEN"]
@@ -75,9 +167,9 @@ TURSO_URL_CLEAN = _clean_turso_url(TURSO_URL)
 TURSO_PIPELINE = f"{TURSO_URL_CLEAN}/v2/pipeline"
 
 
-# =====================================================
-# Turso HTTP Client (Pipeline API + Connection Pooling)
-# =====================================================
+# ============================================================
+# Turso HTTP Client
+# ============================================================
 class DictRow:
     def __init__(self, columns, values):
         self._columns = list(columns)
@@ -178,7 +270,6 @@ class WrappedCursor:
         self._rows = [DictRow(self._columns, [_decode_cell(c) for c in row]) for row in raw_rows]
         self._idx = 0
 
-        # ✅ استخراج lastrowid من RETURNING id (لو موجود)
         if sql_upper.startswith("INSERT") and "RETURNING" in sql_upper:
             if self._rows and 'id' in self._rows[0].keys():
                 self.lastrowid = self._rows[0]['id']
@@ -209,7 +300,6 @@ class WrappedConnection:
     def __init__(self, url, auth_token):
         self._url = url
         self._token = auth_token
-        # ✅ Connection Pooling
         self._session = requests.Session()
         self._session.headers.update({
             "Authorization": f"Bearer {auth_token}",
@@ -234,7 +324,7 @@ class WrappedConnection:
                 except Exception: pass
 
     def execute_batch(self, queries):
-        """✅ تنفيذ عدة SELECT في طلب HTTP واحد"""
+        """تنفيذ عدة SELECT في طلب HTTP واحد"""
         stmts = []
         for sql, params in queries:
             args = [_encode_arg(p) for p in (params or [])]
@@ -258,6 +348,32 @@ class WrappedConnection:
             output.append([DictRow(cols, [_decode_cell(c) for c in row]) for row in rows])
         return output
 
+    def execute_write_batch(self, queries):
+        """✅ تنفيذ عدة INSERT/UPDATE/DELETE في طلب HTTP واحد"""
+        if not queries:
+            return 0
+        stmts = []
+        for sql, params in queries:
+            args = [_encode_arg(p) for p in (params or [])]
+            stmts.append({"type": "execute", "stmt": {"sql": sql, "args": args, "want_rows": False}})
+        stmts.append({"type": "close"})
+        payload = {"requests": stmts}
+        try:
+            r = self._session.post(self._url, json=payload, timeout=180)
+        except Exception as e:
+            raise Exception(f"فشل الاتصال: {e}")
+        if not r.ok:
+            try: err_data = r.json()
+            except: err_data = r.text[:300]
+            raise Exception(f"Turso HTTP {r.status_code}: {err_data}")
+        data = r.json()
+        results = data.get("results", [])
+        for res in results[:-1]:
+            if res.get("type") == "error":
+                msg = res.get("error", {}).get("message", "خطأ")
+                raise Exception(f"Turso: {msg}")
+        return len(queries)
+
     def commit(self): pass
     def rollback(self): pass
     def close(self): pass
@@ -269,9 +385,9 @@ def get_conn():
     return st.session_state.db_conn
 
 
-# =====================================================
+# ============================================================
 # Telegram
-# =====================================================
+# ============================================================
 def is_telegram_file_id(s):
     if not s: return False
     return str(s).startswith(('AgAC', 'BQAC', 'BAAC', 'AgAD', 'BAAD', 'CAAC'))
@@ -326,9 +442,9 @@ def render_attachment_download(att_value, key_prefix, label="📥 تحميل ا�
                 else: st.error("فشل تحميل المرفق")
 
 
-# =====================================================
+# ============================================================
 # Utilities
-# =====================================================
+# ============================================================
 def safe_float(value, default=0.0):
     try:
         if value is None or pd.isna(value): return default
@@ -652,9 +768,9 @@ def print_receipt(receipt_id):
     return buf.getvalue()
 
 
-# =====================================================
+# ============================================================
 # Init DB
-# =====================================================
+# ============================================================
 def ensure_column(cur, table, col_name, col_type="TEXT", default=None):
     try:
         dflt = f" DEFAULT {default}" if default is not None else ""
@@ -791,9 +907,9 @@ background_color = settings['background_color']
 logo_data = load_logo_data()
 
 
-# =====================================================
+# ============================================================
 # Login
-# =====================================================
+# ============================================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False; st.session_state.user_info = None
 
@@ -847,9 +963,9 @@ st.sidebar.markdown("---")
 menu = st.sidebar.radio("القائمة الرئيسية", PAGE_KEYS)
 
 
-# =====================================================
+# ============================================================
 # Core helpers
-# =====================================================
+# ============================================================
 def generate_receipt_number(): return f"RCP-{int(time.time())}"
 
 
@@ -1040,7 +1156,6 @@ def get_tenant_contracts_history(tid):
 
 
 def get_total_dues_until(target_date, only_overdue=False):
-    # ✅ Batch: 4 استعلامات في طلب واحد
     conn = get_conn()
     q1 = "SELECT COALESCE(SUM(amount - paid_amount), 0) as t FROM payments WHERE due_date <= ?" + (" AND (amount - paid_amount) > 0" if only_overdue else "")
     q2 = "SELECT COALESCE(SUM(amount - paid_amount), 0) as t FROM payments WHERE (amount - paid_amount) > 0"
@@ -1057,9 +1172,9 @@ def get_total_dues_until(target_date, only_overdue=False):
     return total, total_all, cnt_due, cnt_over
 
 
-# =====================================================
+# ============================================================
 # Cached loaders
-# =====================================================
+# ============================================================
 @st.cache_data(ttl=60)
 def load_tenants():
     conn = get_conn(); cur = conn.cursor()
@@ -1122,7 +1237,6 @@ def load_payments(sf='الكل'):
 @st.cache_data(ttl=60)
 def load_receipts():
     conn = get_conn(); cur = conn.cursor()
-    # ✅ LEFT JOIN للتعامل مع مستأجرين محذوفين
     cur.execute('''SELECT r.id as 'الرقم', r.receipt_number as 'رقم السند',
         COALESCE(t.name, 'مستأجر محذوف') as 'المستأجر',
         r.amount as 'المبلغ', r.receipt_date as 'التاريخ', r.payment_method as 'طريقة الدفع',
@@ -1135,48 +1249,112 @@ def load_receipts():
     return pd.DataFrame([list(r) for r in rows], columns=cols)
 
 
-# =====================================================
-# Excel imports
-# =====================================================
+# ============================================================
+# Excel imports (BATCH)
+# ============================================================
 def import_tenants_from_excel(f):
     try:
         df = pd.read_excel(f)
-        if "الاسم" not in df.columns: st.error("يجب عمود 'الاسم'"); return
-        conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT name FROM tenants"); ex = {r['name'] for r in cur.fetchall()}
-        add = 0
+        if "الاسم" not in df.columns:
+            st.error("يجب أن يحتوي الملف على عمود 'الاسم'")
+            return
+        st.info(f"📊 تم قراءة {len(df)} صف من الملف")
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM tenants")
+        existing = {r['name'] for r in cur.fetchall()}
+        to_insert = []
         for _, row in df.iterrows():
             n = str(row.get("الاسم", "")).strip()
-            if not n or n in ex: continue
-            cur.execute('INSERT INTO tenants (name, phone, national_id, address, region, notes) VALUES (?,?,?,?,?,?)',
-                        [n, str(row.get("الهاتف","")).strip() if "الهاتف" in df.columns else "",
-                         str(row.get("رقم الهوية / الإقامة","")).strip() if "رقم الهوية / الإقامة" in df.columns else "",
-                         str(row.get("العنوان","")).strip() if "العنوان" in df.columns else "",
-                         str(row.get("المنطقة","")).strip() if "المنطقة" in df.columns else "",
-                         str(row.get("ملاحظات","")).strip() if "ملاحظات" in df.columns else ""])
-            add += 1
-        st.cache_data.clear(); st.toast(f"تم استيراد {add} مستأجر", icon="✅")
-    except Exception as e: st.error(f"خطأ: {e}")
+            if not n or n in existing:
+                continue
+            to_insert.append([
+                n,
+                str(row.get("الهاتف", "")).strip() if "الهاتف" in df.columns else "",
+                str(row.get("رقم الهوية / الإقامة", "")).strip() if "رقم الهوية / الإقامة" in df.columns else "",
+                str(row.get("العنوان", "")).strip() if "العنوان" in df.columns else "",
+                str(row.get("المنطقة", "")).strip() if "المنطقة" in df.columns else "",
+                str(row.get("ملاحظات", "")).strip() if "ملاحظات" in df.columns else "",
+            ])
+        if not to_insert:
+            st.warning("⚠️ لا يوجد صفوف جديدة للاستيراد (كل الأسماء موجودة مسبقاً)")
+            return
+        st.info(f"⏳ جاري استيراد {len(to_insert)} مستأجر...")
+        progress = st.progress(0)
+        status = st.empty()
+        BATCH_SIZE = 50
+        batches = [to_insert[i:i+BATCH_SIZE] for i in range(0, len(to_insert), BATCH_SIZE)]
+        sql = 'INSERT INTO tenants (name, phone, national_id, address, region, notes) VALUES (?,?,?,?,?,?)'
+        total_done = 0
+        for i, batch in enumerate(batches, 1):
+            status.text(f"📦 دفعة {i}/{len(batches)} ({len(batch)} صف)...")
+            queries = [(sql, row) for row in batch]
+            conn.execute_write_batch(queries)
+            total_done += len(batch)
+            progress.progress(i / len(batches))
+        status.text("")
+        progress.empty()
+        st.cache_data.clear()
+        st.success(f"✅ تم استيراد {total_done} مستأجر بنجاح")
+        st.toast(f"تم استيراد {total_done} مستأجر", icon="✅")
+        time.sleep(1)
+        st.rerun()
+    except Exception as e:
+        st.error(f"❌ خطأ: {e}")
+        with st.expander("تفاصيل الخطأ"):
+            st.code(traceback.format_exc())
 
 
 def import_properties_from_excel(f):
     try:
         df = pd.read_excel(f)
-        if "الاسم" not in df.columns: st.error("يجب عمود 'الاسم'"); return
-        conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT name FROM properties"); ex = {r['name'] for r in cur.fetchall()}
-        add = 0
+        if "الاسم" not in df.columns:
+            st.error("يجب أن يحتوي الملف على عمود 'الاسم'")
+            return
+        st.info(f"📊 تم قراءة {len(df)} صف من الملف")
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM properties")
+        existing = {r['name'] for r in cur.fetchall()}
+        to_insert = []
         for _, row in df.iterrows():
             n = str(row["الاسم"]).strip()
-            if not n or n in ex: continue
-            cur.execute('INSERT INTO properties (name, description, address, region, area) VALUES (?,?,?,?,?)',
-                        [n, str(row.get("الوصف","")).strip() if "الوصف" in df.columns else "",
-                         str(row.get("العنوان","")).strip() if "العنوان" in df.columns else "",
-                         str(row.get("المنطقة","")).strip() if "المنطقة" in df.columns else "",
-                         str(row.get("المساحة","")).strip() if "المساحة" in df.columns else ""])
-            add += 1
-        st.cache_data.clear(); st.toast(f"تم استيراد {add} عقار", icon="✅")
-    except Exception as e: st.error(f"خطأ: {e}")
+            if not n or n in existing:
+                continue
+            to_insert.append([
+                n,
+                str(row.get("الوصف", "")).strip() if "الوصف" in df.columns else "",
+                str(row.get("العنوان", "")).strip() if "العنوان" in df.columns else "",
+                str(row.get("المنطقة", "")).strip() if "المنطقة" in df.columns else "",
+                str(row.get("المساحة", "")).strip() if "المساحة" in df.columns else "",
+            ])
+        if not to_insert:
+            st.warning("⚠️ لا يوجد صفوف جديدة")
+            return
+        st.info(f"⏳ جاري استيراد {len(to_insert)} عقار...")
+        progress = st.progress(0)
+        status = st.empty()
+        BATCH_SIZE = 50
+        batches = [to_insert[i:i+BATCH_SIZE] for i in range(0, len(to_insert), BATCH_SIZE)]
+        sql = 'INSERT INTO properties (name, description, address, region, area) VALUES (?,?,?,?,?)'
+        total_done = 0
+        for i, batch in enumerate(batches, 1):
+            status.text(f"📦 دفعة {i}/{len(batches)}...")
+            queries = [(sql, row) for row in batch]
+            conn.execute_write_batch(queries)
+            total_done += len(batch)
+            progress.progress(i / len(batches))
+        status.text("")
+        progress.empty()
+        st.cache_data.clear()
+        st.success(f"✅ تم استيراد {total_done} عقار بنجاح")
+        st.toast(f"تم استيراد {total_done} عقار", icon="✅")
+        time.sleep(1)
+        st.rerun()
+    except Exception as e:
+        st.error(f"❌ خطأ: {e}")
+        with st.expander("تفاصيل الخطأ"):
+            st.code(traceback.format_exc())
 
 
 def parse_excel_date(val):
@@ -1290,9 +1468,9 @@ def import_contracts_from_excel(f):
     except Exception as e: st.error(f"خطأ: {e}")
 
 
-# =====================================================
-# CRUD (باستخدام RETURNING id)
-# =====================================================
+# ============================================================
+# CRUD
+# ============================================================
 def add_user(u, p, r):
     conn = get_conn(); cur = conn.cursor()
     cur.execute("SELECT COUNT(*) as c FROM users WHERE username = ? COLLATE NOCASE", [u.strip()])
@@ -1357,7 +1535,6 @@ def add_contract_full(tid, pid, cn, sd, ed, ra, im, da, ti, tr, nt, fb_file_id, 
     if cur.fetchone()['c'] > 0: return False, "⚠️ يوجد عقد نشط متداخل مع هذه الفترة", None
     hs = gregorian_to_hijri(sd) if calendar_type == 'هجري' else None
     he = gregorian_to_hijri(ed) if calendar_type == 'هجري' else None
-    # ✅ RETURNING id
     cur.execute('''INSERT INTO contracts (tenant_id, property_id, contract_number, start_date, end_date,
         rent_amount, interval_months, deposit_amount, notes, tax_included, tax_rate, contract_file,
         calendar_type, hijri_start_date, hijri_end_date)
@@ -1468,9 +1645,9 @@ def delete_receipt(rid):
     return True, "تم حذف السند"
 
 
-# =====================================================
+# ============================================================
 # Backup
-# =====================================================
+# ============================================================
 BACKUP_TABLES = ['settings','users','tenants','properties','contracts','payments','receipts',
                  'alerts','contract_pricing_tiers','additional_fees','contract_discounts']
 
@@ -1521,9 +1698,9 @@ def download_file_from_telegram_backup(file_id):
     return r.content
 
 
-# =====================================================
+# ============================================================
 # الصفحات
-# =====================================================
+# ============================================================
 if menu == "لوحة التحكم" and has_permission(current_user_id, "لوحة التحكم"):
     st.subheader("📊 لوحة التحكم")
     df_t = load_tenants(); df_c = load_contracts(); df_p = load_payments()
@@ -1590,7 +1767,7 @@ elif menu == "إدارة البيانات":
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_tmpl_t")
             with ci2:
                 uf = st.file_uploader("استيراد", type=["xlsx","xls"], key="imp_t")
-                if uf and st.button("تنفيذ", key="btn_imp_t"): import_tenants_from_excel(uf); st.rerun()
+                if uf and st.button("تنفيذ", key="btn_imp_t"): import_tenants_from_excel(uf)
             if st.button("➕ إضافة مستأجر", key="btn_add_t"): st.session_state['show_add_t'] = True
             if st.session_state.get('show_add_t'):
                 with st.form("add_t_f"):
@@ -1675,7 +1852,7 @@ elif menu == "إدارة البيانات":
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_tmpl_p")
             with ci2:
                 uf = st.file_uploader("استيراد", type=["xlsx","xls"], key="imp_p")
-                if uf and st.button("تنفيذ", key="btn_imp_p"): import_properties_from_excel(uf); st.rerun()
+                if uf and st.button("تنفيذ", key="btn_imp_p"): import_properties_from_excel(uf)
             if st.button("➕ إضافة عقار", key="btn_add_p"): st.session_state['show_add_p'] = True
             if st.session_state.get('show_add_p'):
                 with st.form("add_p_f"):
@@ -1917,7 +2094,6 @@ elif menu == "سندات القبض":
                     show_adv = st.checkbox("🔮 عرض الدفعات المستقبلية (مقدمة)", value=False, key="show_advance_chk")
                     st.markdown("### 💵 ملخص المديونية")
                     conn = get_conn()
-                    # ✅ Batch: 3 استعلامات في طلب واحد
                     res = conn.execute_batch([
                         ("SELECT COALESCE(SUM(amount - paid_amount), 0) as t FROM payments WHERE tenant_id=? AND (amount - paid_amount) > 0", [tid]),
                         ("SELECT COALESCE(SUM(amount - paid_amount), 0) as t FROM payments WHERE tenant_id=? AND (amount - paid_amount) > 0 AND due_date < ?", [tid, today.isoformat()]),
@@ -2147,7 +2323,6 @@ elif menu == "التقارير":
                         else: td = st.date_input("إلى", value=date.today(), key="kr_d2")
                     if cc == "هجري": st.info(f"📆 الفترة (م): من **{fd}** إلى **{td}**")
                     inc_past = st.checkbox("☑️ تضمين المتأخرات قبل الفترة", value=False, key=f"kashf_past_{tid}")
-                    # ✅ Batch: 5 استعلامات في طلب واحد
                     conn = get_conn()
                     pay_q = '''SELECT pay.id, pay.due_date, pay.amount, pay.paid_amount, (pay.amount-pay.paid_amount) as rem,
                                pay.status, pay.paid_date, pay.attachment, c.contract_number
