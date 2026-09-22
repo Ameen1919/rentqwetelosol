@@ -1627,7 +1627,7 @@ elif menu == "إدارة البيانات":
                             st.markdown("---")
                             if current_role == 'مدير':
                                 c1, c2 = st.columns(2)
-                                                                if c1.button("تعديل العقد", key=f"btn_ed_c_{cid}"):
+                            if c1.button("تعديل العقد", key=f"btn_ed_c_{cid}"):
                                     try:
                                         with st.spinner("⏳ جاري تحميل بيانات العقد..."):
                                             # تحميل البيانات مسبقاً في cache
