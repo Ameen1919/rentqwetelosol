@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
-import io, gzip, tempfile, time, os, base64, hashlib, json, traceback
+import io, gzip, time, os, base64, hashlib, json, traceback
 from datetime import date, timedelta, datetime
 from dateutil.relativedelta import relativedelta
 from hijri_converter import convert
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
-import requests
-import arabic_reshaper
+import requests, arabic_reshaper
 from bidi.algorithm import get_display
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -18,34 +17,32 @@ st.set_page_config(page_title="نظام إدارة الإيجارات", page_ico
 
 st.markdown("""
 <style>
-    html, body, [class*="css"] { direction: rtl !important; text-align: right !important; }
-    .stApp { direction: rtl !important; }
-    .stButton, .stSelectbox, .stTextInput, .stNumberInput, .stDateInput, .stRadio, .stCheckbox { direction: rtl !important; text-align: right !important; }
-    h1, h2, h3, h4, h5, h6 { direction: rtl !important; text-align: right !important; }
-    .stTabs [data-baseweb="tab-list"] { direction: rtl !important; }
-    input, textarea { direction: rtl !important; text-align: right !important; }
-    .stDownloadButton button { direction: rtl !important; }
-    .streamlit-expanderHeader { direction: rtl !important; text-align: right !important; }
-    .stAlert { direction: rtl !important; text-align: right !important; }
-    [data-testid="stMetric"] { direction: rtl !important; text-align: right !important; }
-    [data-testid="stDataFrame"] { direction: ltr !important; }
-    [data-testid="stDataFrame"] [role="columnheader"] { text-align: center !important; }
-    [data-testid="stSidebar"] { direction: rtl !important; text-align: right !important; }
-    [data-testid="stSidebarCollapseButton"], button[data-testid="baseButton-headerNoPadding"] {
-        position: absolute !important; right: 12px !important; left: auto !important; top: 12px !important; z-index: 999 !important; }
-    [data-testid="stSidebarCollapseButton"] svg, button[data-testid="baseButton-headerNoPadding"] svg { transform: scaleX(-1) !important; }
-    [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarCollapseButton"] {
-        background-color: rgba(255, 255, 255, 0.2) !important; border-radius: 8px !important; padding: 4px !important; }
-    section[data-testid="stSidebar"][aria-expanded="false"] + section [data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"] {
-        position: fixed !important; top: 12px !important; right: 12px !important; left: auto !important;
-        background-color: #4A90E2 !important; border-radius: 8px !important; padding: 8px 12px !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important; z-index: 9999 !important; }
-    [data-testid="collapsedControl"] svg { transform: scaleX(-1) !important; color: white !important; }
-    [data-testid="collapsedControl"]:hover { background-color: #357ABD !important; }
-    [data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:first-child { padding-top: 30px !important; }
-    [data-testid="stSidebar"] .stRadio > label { padding: 8px 12px !important; border-radius: 6px !important; display: block !important; margin-bottom: 4px !important; }
-    [data-testid="stSidebar"] .stRadio > label:hover { background-color: rgba(255, 255, 255, 0.15) !important; }
-    [data-testid="stSidebar"] .stRadio > label:has(input:checked) { background-color: rgba(255, 255, 255, 0.25) !important; font-weight: bold !important; }
+html, body, [class*="css"] { direction: rtl !important; text-align: right !important; }
+.stApp { direction: rtl !important; }
+.stButton, .stSelectbox, .stTextInput, .stNumberInput, .stDateInput, .stRadio, .stCheckbox { direction: rtl !important; text-align: right !important; }
+h1,h2,h3,h4,h5,h6 { direction: rtl !important; text-align: right !important; }
+.stTabs [data-baseweb="tab-list"] { direction: rtl !important; }
+input, textarea { direction: rtl !important; text-align: right !important; }
+.stDownloadButton button { direction: rtl !important; }
+.streamlit-expanderHeader { direction: rtl !important; text-align: right !important; }
+.stAlert { direction: rtl !important; text-align: right !important; }
+[data-testid="stMetric"] { direction: rtl !important; text-align: right !important; }
+[data-testid="stDataFrame"] { direction: ltr !important; }
+[data-testid="stDataFrame"] [role="columnheader"] { text-align: center !important; }
+[data-testid="stSidebar"] { direction: rtl !important; text-align: right !important; }
+[data-testid="stSidebarCollapseButton"], button[data-testid="baseButton-headerNoPadding"] {
+position: absolute !important; right: 12px !important; left: auto !important; top: 12px !important; z-index: 999 !important; }
+[data-testid="stSidebarCollapseButton"] svg, button[data-testid="baseButton-headerNoPadding"] svg { transform: scaleX(-1) !important; }
+[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarCollapseButton"] {
+background-color: rgba(255, 255, 255, 0.2) !important; border-radius: 8px !important; padding: 4px !important; }
+section[data-testid="stSidebar"][aria-expanded="false"] + section [data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"] {
+position: fixed !important; top: 12px !important; right: 12px !important; left: auto !important;
+background-color: #4A90E2 !important; border-radius: 8px !important; padding: 8px 12px !important;
+box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important; z-index: 9999 !important; }
+[data-testid="collapsedControl"] svg { transform: scaleX(-1) !important; color: white !important; }
+[data-testid="stSidebar"] .stRadio > label { padding: 8px 12px !important; border-radius: 6px !important; display: block !important; margin-bottom: 4px !important; }
+[data-testid="stSidebar"] .stRadio > label:hover { background-color: rgba(255, 255, 255, 0.15) !important; }
+[data-testid="stSidebar"] .stRadio > label:has(input:checked) { background-color: rgba(255, 255, 255, 0.25) !important; font-weight: bold !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,13 +69,12 @@ TURSO_PIPELINE = f"{TURSO_URL_CLEAN}/v2/pipeline"
 
 
 # ============================================================
-# Turso HTTP Client with SMART RETRY + SAFETY
+# Turso HTTP Client with SMART RETRY
 # ============================================================
 class DictRow:
     def __init__(self, columns, values):
         self._columns = list(columns); self._values = list(values); self._map = dict(zip(self._columns, self._values))
-    def __getitem__(self, key):
-        return self._values[key] if isinstance(key, int) else self._map.get(key)
+    def __getitem__(self, key): return self._values[key] if isinstance(key, int) else self._map.get(key)
     def __getattr__(self, name):
         if name.startswith('_'): raise AttributeError(name)
         if name in self._map: return self._map[name]
@@ -106,10 +102,8 @@ def _decode_cell(cell):
     if cell is None: return None
     t = cell.get("type")
     if t == "null": return None
-    if t == "integer": 
-        v = cell.get("value"); return int(v) if v is not None else None
-    if t == "float":
-        v = cell.get("value"); return float(v) if v is not None else None
+    if t == "integer": return int(cell.get("value")) if cell.get("value") is not None else None
+    if t == "float": return float(cell.get("value")) if cell.get("value") is not None else None
     if t == "text": return cell.get("value")
     if t == "blob": return base64.b64decode(cell.get("base64", ""))
     return cell.get("value")
@@ -124,16 +118,13 @@ class WrappedCursor:
         params = params or []
         if not isinstance(params, (list, tuple)): params = [params]
         sql_str = sql.strip(); sql_upper = sql_str.upper()
-
         if sql_upper.startswith("PRAGMA"):
             self._rows = []; self._columns = []; self._idx = 0; self.lastrowid = None; return self
-
         args = [_encode_arg(p) for p in params]
         payload = {"requests": [
             {"type": "execute", "stmt": {"sql": sql_str, "args": args, "want_rows": True}},
             {"type": "close"}
         ]}
-        # ✅ Smart retry حسب نوع العملية
         is_insert = sql_upper.startswith("INSERT")
         r = self._conn._safe_post(payload, timeout=120, is_write=is_insert)
         if not r.ok:
@@ -145,8 +136,7 @@ class WrappedCursor:
         results = data.get("results", [])
         if not results: raise Exception("رد Turso فاضي")
         first = results[0]
-        if first.get("type") == "error":
-            em = first.get("error", {}).get("message", "خطأ"); raise Exception(f"Turso: {em}")
+        if first.get("type") == "error": raise Exception(f"Turso: {first.get('error',{}).get('message','خطأ')}")
         resp = first.get("response", {}).get("result", {})
         cols_info = resp.get("cols", [])
         self._columns = [c.get("name") for c in cols_info]
@@ -181,24 +171,17 @@ class WrappedConnection:
             try: self._session.close()
             except: pass
         self._session = requests.Session()
-        self._session.headers.update({
-            "Authorization": f"Bearer {self._token}",
-            "Content-Type": "application/json",
-            "Connection": "keep-alive",
-        })
+        self._session.headers.update({"Authorization": f"Bearer {self._token}", "Content-Type": "application/json", "Connection": "keep-alive"})
         adapter = requests.adapters.HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=0, pool_block=False)
         self._session.mount("https://", adapter); self._session.mount("http://", adapter)
 
     def _safe_post(self, payload, timeout=120, max_retries=3, is_write=False):
-        """Smart retry: INSERT → مرة واحدة فقط (أمان ضد التكرار)، غيره → 3 محاولات"""
         if is_write: max_retries = 1
         last_err = None
         for attempt in range(max_retries):
-            try:
-                return self._session.post(self._url, json=payload, timeout=timeout)
+            try: return self._session.post(self._url, json=payload, timeout=timeout)
             except Exception as e:
-                last_err = e
-                err_str = str(e).lower()
+                last_err = e; err_str = str(e).lower()
                 retryable = any(x in err_str for x in ['protocol','connection','timeout','reset','broken','eof','ssl','chunked','incomplete']) or isinstance(e, (
                     requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError,
                     requests.exceptions.Timeout, requests.exceptions.RequestException,
@@ -344,9 +327,8 @@ def display_dataframe_with_reorder(df, key_prefix):
     columns = list(df.columns)
     default = st.session_state.get(f"{key_prefix}_order", columns)
     selected = st.multiselect("اختر الأعمدة وترتيبها", options=columns, default=default, key=f"{key_prefix}_cols")
-    if selected:
-        df_out = df[selected]; st.session_state[f"{key_prefix}_order"] = selected
-    else: df_out = df
+    df_out = df[selected] if selected else df
+    if selected: st.session_state[f"{key_prefix}_order"] = selected
     rtl_dataframe(df_out, key=f"{key_prefix}_rtl")
     return df_out, selected
 
@@ -577,7 +559,7 @@ def export_tax_pdf(df, title, file_name, columns_order=None, landscape_mode=True
     st.download_button(f"تحميل PDF ({or_label})", data=buf, file_name=file_name, mime="application/pdf")
 
 def print_receipt(receipt_id):
-    conn = get_conn(); cur = conn.cursor()
+    cur = get_conn().cursor()
     cur.execute('''SELECT r.receipt_number, COALESCE(t.name, 'مستأجر محذوف') as name,
                    r.amount, r.receipt_date, r.payment_method, r.notes
                    FROM receipts r LEFT JOIN tenants t ON r.tenant_id = t.id WHERE r.id = ?''', [receipt_id])
@@ -596,7 +578,7 @@ def print_receipt(receipt_id):
 
 
 # ============================================================
-# Init DB + UNIQUE Indexes (حماية من التكرار)
+# Init DB
 # ============================================================
 def ensure_column(cur, table, col_name, col_type="TEXT", default=None):
     try:
@@ -606,7 +588,7 @@ def ensure_column(cur, table, col_name, col_type="TEXT", default=None):
 
 @st.cache_resource
 def init_db():
-    conn = get_conn(); cur = conn.cursor()
+    cur = get_conn().cursor()
     cur.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     cur.execute('''CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,
                    password_hash TEXT, role TEXT DEFAULT 'مشاهد', permissions TEXT DEFAULT '{}', created_at TEXT DEFAULT CURRENT_TIMESTAMP)''')
@@ -639,15 +621,12 @@ def init_db():
         ensure_column(cur, 'contracts', col, typ, dflt)
     ensure_column(cur, 'receipts', 'attachment', 'TEXT', None)
     ensure_column(cur, 'users', 'permissions', 'TEXT', "'{}'")
-    
-    # ✅ حماية من التكرار (UNIQUE Indexes)
     try: cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_number ON receipts(receipt_number)")
     except: pass
     try: cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_contracts_number ON contracts(contract_number)")
     except: pass
     try: cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username COLLATE NOCASE)")
     except: pass
-    
     cur.execute("SELECT COUNT(*) as c FROM users")
     r = cur.fetchone()
     if r and r['c'] == 0:
@@ -664,8 +643,7 @@ def get_default_permissions(role):
     return {p: False for p in PAGE_KEYS}
 
 def load_permissions(uid):
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT role, permissions FROM users WHERE id = ?", [uid]); r = cur.fetchone()
+    cur = get_conn().cursor(); cur.execute("SELECT role, permissions FROM users WHERE id = ?", [uid]); r = cur.fetchone()
     if not r: return {}
     try: perms = json.loads(r['permissions'] or '{}')
     except: perms = {}
@@ -675,22 +653,18 @@ def load_permissions(uid):
     return perms
 
 def save_permissions(uid, perms):
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("UPDATE users SET permissions = ? WHERE id = ?", [json.dumps(perms), uid]); st.cache_data.clear()
+    cur = get_conn().cursor(); cur.execute("UPDATE users SET permissions = ? WHERE id = ?", [json.dumps(perms), uid]); st.cache_data.clear()
 
 def has_permission(uid, page): return bool(uid) and load_permissions(uid).get(page, False)
 
 def check_login(u, p):
-    conn = get_conn(); cur = conn.cursor()
-    ph = hashlib.sha256(p.strip().encode()).hexdigest()
+    cur = get_conn().cursor(); ph = hashlib.sha256(p.strip().encode()).hexdigest()
     cur.execute("SELECT id, username, role FROM users WHERE username = ? COLLATE NOCASE AND password_hash = ?", [u.strip(), ph])
     usr = cur.fetchone()
     return {'id': usr['id'], 'username': usr['username'], 'role': usr['role']} if usr else None
 
 def load_settings():
-    conn = get_conn(); cur = conn.cursor()
-    cur.execute("SELECT key, value FROM settings"); rows = cur.fetchall()
-    s = {}
+    cur = get_conn().cursor(); cur.execute("SELECT key, value FROM settings"); rows = cur.fetchall(); s = {}
     for r in rows:
         try: s[r['key']] = int(r['value']) if r['key'] == 'font_size' else r['value']
         except: s[r['key']] = r['value']
@@ -700,10 +674,9 @@ def load_settings():
     return s
 
 def save_setting(k, v):
-    conn = get_conn(); cur = conn.cursor()
+    cur = get_conn().cursor()
     vs = '' if v is None else (base64.b64encode(v).decode('utf-8') if isinstance(v, bytes) else str(v))
-    cur.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [k, vs])
-    st.cache_data.clear()
+    cur.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [k, vs]); st.cache_data.clear()
 
 def load_logo_data():
     lb = load_settings().get('logo')
@@ -741,13 +714,13 @@ current_user_id = user_info['id']; current_role = user_info['role']
 user_permissions = load_permissions(current_user_id)
 
 st.markdown(f"""<style>html,body,[class*="css"]{{direction:rtl;text-align:right;font-size:{font_size}px;}}
-    .stApp{{background-color:{background_color};}}.stSidebar{{background-color:{primary_color};color:white;}}
-    .stSidebar [data-testid="stMarkdown"]{{color:white;}}.stSidebar .stRadio label,.stSidebar .stSelectbox label{{color:white!important;}}
-    .stButton>button{{background-color:{secondary_color};color:white;border-radius:8px;border:none;padding:8px 16px;font-weight:bold;}}
-    .stButton>button:hover{{background-color:{primary_color};color:white;}}h1,h2,h3,h4{{color:{primary_color};}}
-    .stMetric{{background-color:white;padding:15px;border-radius:10px;box-shadow:0 2px 5px rgba(0,0,0,0.1);text-align:center;}}
-    .stDataFrame,.stTable{{background-color:white;border-radius:10px;padding:10px;box-shadow:0 2px 5px rgba(0,0,0,0.1);}}
-    </style>""", unsafe_allow_html=True)
+.stApp{{background-color:{background_color};}}.stSidebar{{background-color:{primary_color};color:white;}}
+.stSidebar [data-testid="stMarkdown"]{{color:white;}}.stSidebar .stRadio label,.stSidebar .stSelectbox label{{color:white!important;}}
+.stButton>button{{background-color:{secondary_color};color:white;border-radius:8px;border:none;padding:8px 16px;font-weight:bold;}}
+.stButton>button:hover{{background-color:{primary_color};color:white;}}h1,h2,h3,h4{{color:{primary_color};}}
+.stMetric{{background-color:white;padding:15px;border-radius:10px;box-shadow:0 2px 5px rgba(0,0,0,0.1);text-align:center;}}
+.stDataFrame,.stTable{{background-color:white;border-radius:10px;padding:10px;box-shadow:0 2px 5px rgba(0,0,0,0.1);}}
+</style>""", unsafe_allow_html=True)
 
 if logo_data: st.sidebar.image(logo_data, width=150)
 else: st.sidebar.markdown("🏢 **نظام الإدارة**")
@@ -878,12 +851,6 @@ def delete_temporary_payment(pid):
 def delete_all_temporary_payments(cid):
     cur = get_conn().cursor(); cur.execute("DELETE FROM payments WHERE contract_id=? AND is_temporary=1", [cid]); st.cache_data.clear()
 
-def get_unread_alerts(tid=None):
-    cur = get_conn().cursor()
-    if tid: cur.execute("SELECT alert_text, alert_date FROM alerts WHERE tenant_id = ? AND is_read = 0 ORDER BY alert_date DESC", [tid])
-    else: cur.execute("SELECT a.alert_text, a.alert_date, t.name FROM alerts a JOIN tenants t ON a.tenant_id = t.id WHERE a.is_read = 0 ORDER BY a.alert_date DESC")
-    return cur.fetchall()
-
 def get_all_expired_contracts():
     cur = get_conn().cursor()
     cur.execute('''SELECT c.id, c.contract_number, t.name as tenant_name, c.end_date, c.tenant_id,
@@ -989,7 +956,7 @@ def load_receipts():
 
 
 # ============================================================
-# Excel imports (BATCH)
+# Excel imports
 # ============================================================
 def import_tenants_from_excel(f):
     try:
@@ -1021,7 +988,6 @@ def import_tenants_from_excel(f):
         st.success(f"✅ تم استيراد {total_done} مستأجر"); time.sleep(1); st.rerun()
     except Exception as e:
         st.error(f"❌ خطأ: {e}")
-        with st.expander("تفاصيل"): st.code(traceback.format_exc())
 
 def import_properties_from_excel(f):
     try:
@@ -1052,7 +1018,6 @@ def import_properties_from_excel(f):
         st.success(f"✅ تم استيراد {total_done} عقار"); time.sleep(1); st.rerun()
     except Exception as e:
         st.error(f"❌ خطأ: {e}")
-        with st.expander("تفاصيل"): st.code(traceback.format_exc())
 
 def parse_excel_date(val):
     if val is None or pd.isna(val): return None
@@ -1156,7 +1121,7 @@ def import_contracts_from_excel(f):
 # CRUD
 # ============================================================
 def add_user(u, p, r):
-    conn = get_conn(); cur = conn.cursor()
+    cur = get_conn().cursor()
     cur.execute("SELECT COUNT(*) as c FROM users WHERE username = ? COLLATE NOCASE", [u.strip()])
     if cur.fetchone()['c'] > 0: return False, "الاسم موجود"
     ph = hashlib.sha256(p.strip().encode()).hexdigest()
@@ -1194,7 +1159,7 @@ def add_property(n, d, a, r, ar):
     cur.execute('INSERT INTO properties (name, description, address, region, area) VALUES (?,?,?,?,?)', [n,d,a,r,ar]); st.cache_data.clear()
 
 def add_contract_full(tid, pid, cn, sd, ed, ra, im, da, ti, tr, nt, fb_file_id, calendar_type='ميلادي', previous_balance=0.0):
-    conn = get_conn(); cur = conn.cursor()
+    cur = get_conn().cursor()
     if cn:
         cur.execute("SELECT id FROM contracts WHERE contract_number=?", [cn])
         if cur.fetchone(): return False, "رقم العقد مستخدم", None
@@ -1299,12 +1264,13 @@ def create_compressed_backup():
         results = conn.execute_batch([(f"SELECT * FROM {t}", []) for t in BACKUP_TABLES])
         data = {t: [r.to_dict() for r in results[i]] for i, t in enumerate(BACKUP_TABLES)}
         json_bytes = json.dumps(data, ensure_ascii=False, default=str).encode('utf-8')
-        return gzip.compress(json_bytes, compresslevel=9), len(json_bytes), len(gzip.compress(json_bytes, compresslevel=9))
+        compressed = gzip.compress(json_bytes, compresslevel=9)
+        return compressed, len(json_bytes), len(compressed)
     except: return None, 0, 0
 
 def restore_from_compressed(compressed_data):
     data = json.loads(gzip.decompress(compressed_data).decode('utf-8'))
-    conn = get_conn(); cur = conn.cursor()
+    cur = get_conn().cursor()
     for tbl in BACKUP_TABLES:
         rows = data.get(tbl, [])
         if not rows: continue
@@ -1634,8 +1600,46 @@ elif menu == "إدارة البيانات":
                                     delete_contract(cid)
                                     st.toast("تم الحذف", icon="🗑️")
                                     st.rerun()
-                                    except Exception as e:
-                                        st.error(f"❌ فشل الحذف: {e}")
+                            if st.session_state.get('edit_contract_id') == cid:
+                                try:
+                                    dft = load_tenants()
+                                    dfp = load_properties()
+                                    with st.form(f"ed_c_f_{cid}"):
+                                        tid = st.selectbox("المستأجر", dft["الرقم"], index=dft.index[dft["الرقم"]==ci['tenant_id']][0], format_func=lambda x: dft[dft["الرقم"]==x]["الاسم"].iloc[0])
+                                        pid = st.selectbox("العقار", dfp["الرقم"], index=dfp.index[dfp["الرقم"]==ci['property_id']][0], format_func=lambda x: dfp[dfp["الرقم"]==x]["الاسم"].iloc[0])
+                                        cn = st.text_input("رقم العقد", value=ci['contract_number'])
+                                        sd = st.date_input("البداية", value=parse_date_safe(ci['start_date']))
+                                        ed = st.date_input("النهاية", value=parse_date_safe(ci['end_date']))
+                                        ra = st.number_input("الإيجار", min_value=0.0, step=100.0, value=float(ci['rent_amount']))
+                                        im = st.number_input("الدورية", min_value=1, value=int(ci['interval_months']))
+                                        da = st.number_input("التأمين", min_value=0.0, step=100.0, value=float(safe_float(ci['deposit_amount'])))
+                                        ti = st.checkbox("شامل الضريبة", value=bool(ci['tax_included']))
+                                        tr = st.number_input("الضريبة (%)", min_value=0.0, value=float(safe_float(ci['tax_rate']))*100) / 100
+                                        nt = st.text_area("ملاحظات", value=ci['notes'] or "")
+                                        nf = st.file_uploader("ملف جديد", type=["pdf"])
+                                        if st.form_submit_button("حفظ"):
+                                            if sd >= ed: st.error("تواريخ خاطئة")
+                                            elif check_overlapping_contract(tid, sd, ed, exclude_cid=cid): st.error("⚠️ عقد متداخل")
+                                            else:
+                                                fb = ci['contract_file']
+                                                if nf: fb = save_uploaded_file(nf, "contract_file")
+                                                cur.execute('''UPDATE contracts SET tenant_id=?, property_id=?, contract_number=?, start_date=?, end_date=?,
+                                                    rent_amount=?, interval_months=?, deposit_amount=?, tax_included=?, tax_rate=?, notes=?, contract_file=?
+                                                    WHERE id=?''',
+                                                    [tid, pid, cn, sd.isoformat(), ed.isoformat(), ra, im, da, 1 if ti else 0, tr, nt, fb, cid])
+                                                cur.execute("DELETE FROM payments WHERE contract_id=? AND (is_temporary IS NULL OR is_temporary=0)", [cid])
+                                                ct = ci['calendar_type'] if 'calendar_type' in ci.keys() else 'ميلادي'
+                                                cnt = create_payment_schedule(cid, tid, sd, ed, ra, im, ct or 'ميلادي')
+                                                st.cache_data.clear(); st.toast(f"تم ({cnt} دفعة)", icon="✅")
+                                                st.session_state['edit_contract_id'] = None; st.rerun()
+                                    if st.button("إلغاء التعديل", key=f"cancel_edit_{cid}"):
+                                        st.session_state['edit_contract_id'] = None
+                                        st.rerun()
+                                except Exception as _err:
+                                    st.error(f"❌ خطأ: {_err}")
+                                    if st.button("إلغاء", key=f"err_cancel_{cid}"):
+                                        st.session_state['edit_contract_id'] = None
+                                        st.rerun()
                 else: st.info("لا عقود")
 
 elif menu == "الدفعات":
@@ -1693,7 +1697,7 @@ elif menu == "سندات القبض":
                         srp = st.selectbox("🔽 المنطقة", rp, key="pay_reg_filter")
                     with f2:
                         tf_ = atp[atp["المنطقة"] == srp] if srp != "الكل" else atp
-                        if tf_.empty: st.warning("لا مستأجرين في هذه المنطقة"); st.stop()
+                        if tf_.empty: st.warning("لا مستأجرين"); st.stop()
                         tid = st.selectbox("🔽 المستأجر", tf_["الرقم"],
                                            format_func=lambda x: tf_[tf_["الرقم"]==x]["الاسم"].iloc[0], key="sel_tenant_pay")
                     today = date.today()
@@ -1717,8 +1721,7 @@ elif menu == "سندات القبض":
                             FROM payments WHERE tenant_id=? AND status != 'مدفوع' AND (amount - paid_amount) > 0 ORDER BY due_date''', [tid])
                     else:
                         cur.execute('''SELECT id, due_date, amount, paid_amount, (amount - paid_amount) as remaining, contract_id
-                            FROM payments WHERE tenant_id=? AND status != 'مدفوع' AND due_date <= ? AND (amount - paid_amount) > 0 ORDER BY due_date''',
-                                    [tid, today.isoformat()])
+                            FROM payments WHERE tenant_id=? AND status != 'مدفوع' AND due_date <= ? AND (amount - paid_amount) > 0 ORDER BY due_date''', [tid, today.isoformat()])
                     dues = cur.fetchall()
                     if not dues: st.info("لا دفعات مستحقة")
                     else:
@@ -1733,7 +1736,8 @@ elif menu == "سندات القبض":
                             rem = od['remaining']; due_dt = od['due_date']
                             is_adv = due_dt > today.isoformat()
                             hej_d = gregorian_to_hijri(parse_date_safe(due_dt))
-                            st.success(f"🔮 دفعة مقدمة — الاستحقاق: **{due_dt} م** ({hej_d} هـ)") if is_adv else st.info(f"📅 الاستحقاق: **{due_dt} م** ({hej_d} هـ)")
+                            if is_adv: st.success(f"🔮 دفعة مقدمة — الاستحقاق: **{due_dt} م** ({hej_d} هـ)")
+                            else: st.info(f"📅 الاستحقاق: **{due_dt} م** ({hej_d} هـ)")
                             pdte = st.date_input("تاريخ السداد", value=today, key="pay_date_in")
                             am = st.number_input("المبلغ", min_value=0.0, max_value=float(rem), value=float(rem), step=100.0, key="pay_amt_in")
                             mt = st.selectbox("طريقة الدفع", ["نقدي","تحويل بنكي","شيك","دفع في المنصة"], key="pay_mt_in")
@@ -2055,8 +2059,7 @@ elif menu == "التقارير":
                 c.tax_rate as "نسبة الضريبة", r.payment_method as "طريقة الدفع"
                 FROM payments pay JOIN tenants t ON pay.tenant_id=t.id
                 JOIN contracts c ON pay.contract_id=c.id LEFT JOIN receipts r ON r.payment_id=pay.id
-                WHERE pay.status='مدفوع' AND pay.paid_date BETWEEN ? AND ? ORDER BY pay.paid_date''',
-                        [fd.isoformat(), td.isoformat()])
+                WHERE pay.status='مدفوع' AND pay.paid_date BETWEEN ? AND ? ORDER BY pay.paid_date''', [fd.isoformat(), td.isoformat()])
             rows = cur.fetchall()
             if rows:
                 taxes = []
@@ -2198,8 +2201,8 @@ elif menu == "نسخ احتياطي":
             try:
                 compressed_data, orig_size, comp_size = create_compressed_backup()
                 if compressed_data:
-                    orig_mb = orig_size / (1024 * 1024); comp_mb = comp_size / (1024 * 1024)
-                    st.write(f"📊 **الأصلي:** {orig_mb:.3f} MB"); st.write(f"📦 **المضغوط:** {comp_mb:.3f} MB")
+                    st.write(f"📊 **الأصلي:** {orig_size/1024/1024:.3f} MB")
+                    st.write(f"📦 **المضغوط:** {comp_size/1024/1024:.3f} MB")
                     st.download_button("⬇️ تحميل (.json.gz)", data=compressed_data,
                                       file_name=f"backup_{date.today()}.json.gz", mime="application/gzip", key="dl_backup_gz")
                 else: st.error("فشل")
