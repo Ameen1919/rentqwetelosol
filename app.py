@@ -1627,29 +1627,13 @@ elif menu == "إدارة البيانات":
                             st.markdown("---")
                             if current_role == 'مدير':
                                 c1, c2 = st.columns(2)
-                                                           if c1.button("تعديل العقد", key=f"btn_ed_c_{cid}"):
-                                    try:
-                                        with st.spinner("⏳ جاري تحميل بيانات العقد..."):
-                                            load_tenants()
-                                            load_properties()
-                                            _c = get_conn().cursor()
-                                            _c.execute("SELECT id FROM contracts WHERE id=?", [cid])
-                                            if not _c.fetchone():
-                                                st.error("❌ العقد غير موجود")
-                                            else:
-                                                st.session_state['edit_contract_id'] = cid
-                                                st.rerun()
-                                    except Exception as e:
-                                        st.error(f"❌ فشل تحميل بيانات العقد: {e}")
-                                        with st.expander("تفاصيل الخطأ"):
-                                            st.code(traceback.format_exc())
-                                
+                                if c1.button("تعديل العقد", key=f"btn_ed_c_{cid}"):
+                                    st.session_state['edit_contract_id'] = cid
+                                    st.rerun()
                                 if c2.button("حذف العقد", key=f"btn_dl_c_{cid}"):
-                                    try:
-                                        with st.spinner("🗑️ جاري الحذف..."):
-                                            delete_contract(cid)
-                                        st.toast("تم الحذف", icon="🗑️")
-                                        st.rerun()
+                                    delete_contract(cid)
+                                    st.toast("تم الحذف", icon="🗑️")
+                                    st.rerun()
                                     except Exception as e:
                                         st.error(f"❌ فشل الحذف: {e}")
                 else: st.info("لا عقود")
