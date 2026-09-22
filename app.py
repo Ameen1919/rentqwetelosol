@@ -1645,7 +1645,7 @@ elif menu == "إدارة البيانات":
                                         st.error(f"❌ فشل تحميل بيانات العقد: {e}")
                                         with st.expander("تفاصيل الخطأ"):
                                             st.code(traceback.format_exc())
-                                                                if c2.button("حذف العقد", key=f"btn_dl_c_{cid}"):
+                                            if c2.button("حذف العقد", key=f"btn_dl_c_{cid}"):
                                     try:
                                         with st.spinner("🗑️ جاري الحذف..."):
                                             delete_contract(cid)
