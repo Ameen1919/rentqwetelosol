@@ -902,41 +902,71 @@ def load_receipts():
 # ============================================================
 # Excel imports (مع معالجة أخطاء واضحة)
 # ============================================================
-def import_tenants_from_excel(f):
+def import_tenants_from_excel(f, update_existing=False):
     try:
         df = pd.read_excel(f)
         if "الاسم" not in df.columns:
             st.error("❌ يجب أن يحتوي الملف على عمود 'الاسم'"); st.stop()
         conn = get_conn(); cur = conn.cursor()
-        cur.execute("SELECT name FROM tenants"); ex = {r['name'] for r in cur.fetchall()}
-        ti = []
+        cur.execute("SELECT id, name FROM tenants")
+        existing_rows = cur.fetchall()
+        existing = {r['name']: r['id'] for r in existing_rows}
+        
+        to_insert = []
+        to_update = []
         for _, row in df.iterrows():
             n = str(row.get("الاسم","")).strip()
-            if not n or n in ex: continue
-            ti.append([n,
-                str(row.get("الهاتف","")).strip() if "الهاتف" in df.columns else "",
-                str(row.get("رقم الهوية / الإقامة","")).strip() if "رقم الهوية / الإقامة" in df.columns else "",
-                str(row.get("العنوان","")).strip() if "العنوان" in df.columns else "",
-                str(row.get("المنطقة","")).strip() if "المنطقة" in df.columns else "",
-                str(row.get("ملاحظات","")).strip() if "ملاحظات" in df.columns else ""])
-        if not ti:
-            st.warning("⚠️ لا يوجد صفوف جديدة للاستيراد (كل الأسماء موجودة مسبقاً)"); st.stop()
+            if not n: continue
+            phone = str(row.get("الهاتف","")).strip() if "الهاتف" in df.columns else ""
+            nid = str(row.get("رقم الهوية / الإقامة","")).strip() if "رقم الهوية / الإقامة" in df.columns else ""
+            addr = str(row.get("العنوان","")).strip() if "العنوان" in df.columns else ""
+            reg = str(row.get("المنطقة","")).strip() if "المنطقة" in df.columns else ""
+            notes = str(row.get("ملاحظات","")).strip() if "ملاحظات" in df.columns else ""
+            if n in existing:
+                if update_existing:
+                    to_update.append([phone, nid, addr, reg, notes, existing[n]])
+                # else: تجاهل
+            else:
+                to_insert.append([n, phone, nid, addr, reg, notes])
+        
+        if not to_insert and not to_update:
+            st.warning("⚠️ لا يوجد صفوف جديدة أو تحتاج تحديث"); st.stop()
+        
         prog = st.progress(0); stt = st.empty()
-        B = 50; batches = [ti[i:i+B] for i in range(0,len(ti),B)]
-        sql = 'INSERT INTO tenants (name, phone, national_id, address, region, notes) VALUES (?,?,?,?,?,?)'
-        td = 0
-        for i,b in enumerate(batches,1):
-            stt.text(f"📦 دفعة {i}/{len(batches)} ({len(b)} صف)...")
-            conn.execute_write_batch([(sql,row) for row in b], is_insert=True); td += len(b); prog.progress(i/len(batches))
+        total_ops = len(to_insert) + len(to_update)
+        done = 0
+        
+        # التحديثات أولاً (batch)
+        if to_update:
+            B = 50
+            batches = [to_update[i:i+B] for i in range(0,len(to_update),B)]
+            sql_u = 'UPDATE tenants SET phone=?, national_id=?, address=?, region=?, notes=? WHERE id=?'
+            for i,b in enumerate(batches,1):
+                stt.text(f"🔄 تحديث دفعة {i}/{len(batches)}...")
+                conn.execute_write_batch([(sql_u,row) for row in b], is_insert=True)
+                done += len(b); prog.progress(done/total_ops)
+        
+        # الإضافات
+        if to_insert:
+            B = 50
+            batches = [to_insert[i:i+B] for i in range(0,len(to_insert),B)]
+            sql_i = 'INSERT INTO tenants (name, phone, national_id, address, region, notes) VALUES (?,?,?,?,?,?)'
+            for i,b in enumerate(batches,1):
+                stt.text(f"➕ إضافة دفعة {i}/{len(batches)}...")
+                conn.execute_write_batch([(sql_i,row) for row in b], is_insert=True)
+                done += len(b); prog.progress(done/total_ops)
+        
         stt.text(""); prog.empty(); st.cache_data.clear()
-        st.success(f"✅ تم استيراد {td} مستأجر بنجاح")
+        parts = []
+        if to_insert: parts.append(f"أضيف {len(to_insert)}")
+        if to_update: parts.append(f"حُدّث {len(to_update)}")
+        st.success(f"✅ تم: {' + '.join(parts)}")
         time.sleep(1.5); st.rerun()
     except Exception as e:
         st.error(f"❌ خطأ في الاستيراد: {e}")
         with st.expander("🔍 تفاصيل الخطأ الكامل", expanded=True):
             st.code(traceback.format_exc())
         st.stop()
-
 def import_properties_from_excel(f):
     try:
         df = pd.read_excel(f)
@@ -1320,7 +1350,10 @@ elif menu == "إدارة البيانات":
                 st.download_button("تحميل قالب", data=o.getvalue(), file_name="قالب_المستأجرين.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_tmpl_t")
             with ci2:
                 uf = st.file_uploader("استيراد", type=["xlsx","xls"], key="imp_t")
-                if uf and st.button("تنفيذ", key="btn_imp_t"): import_tenants_from_excel(uf)
+                if uf:
+                    update_mode = st.checkbox("🔄 تحديث الموجود (بالاسم)", value=False, key="upd_t")
+                    if st.button("تنفيذ", key="btn_imp_t"):
+                        import_tenants_from_excel(uf, update_existing=update_mode)
             if st.button("➕ إضافة مستأجر", key="btn_add_t"): st.session_state['show_add_t'] = True
             if st.session_state.get('show_add_t'):
                 with st.form("add_t_f"):
@@ -2069,6 +2102,12 @@ elif menu == "التقارير":
                 export_df_to_pdf(df_sel, "الإيرادات", f"rev_{fd}_{td}.pdf", columns_order=sel_c, landscape_mode=lc)
             else: st.info("لا إيرادات")
         elif rt == "الضرائب":
+            # ✅ فلتر المنطقة أولاً
+            all_tenants_df = load_tenants()
+            regions_list_tax = ["الكل"] + sorted([r for r in all_tenants_df["المنطقة"].dropna().unique().tolist() if r])
+            rf_tax = st.selectbox("🔽 المنطقة", regions_list_tax, key="tax_region_filter")
+            
+            st.markdown("#### 📅 فترة السداد")
             if cc == "هجري":
                 c1,c2 = st.columns(2)
                 hi1 = c1.text_input("من هجري", "01-01-1445", key="tx_h1"); hi2 = c2.text_input("إلى هجري", "30-12-1445", key="tx_h2")
@@ -2077,28 +2116,68 @@ elif menu == "التقارير":
             else:
                 c1,c2 = st.columns(2)
                 fd = c1.date_input("من", value=date.today().replace(day=1), key="tx_d1"); td = c2.date_input("إلى", value=date.today(), key="tx_d2")
-            # ✅ الحل: نستخدم Subquery بدل JOIN + نضيف المنطقة
+            
+            st.caption("📌 بداية الفترة ونهاية الفترة = فترة الدفعة نفسها (بداية الدفعة ونهايتها حسب دورية السداد)")
+            
             cur = get_conn().cursor()
-            cur.execute('''SELECT t.name as "اسم المستأجر", COALESCE(t.region, '-') as "المنطقة",
-                c.contract_number as "رقم العقد",
-                c.start_date as "بداية الفترة", c.end_date as "نهاية الفترة",
-                pay.amount as "المبلغ شامل الضريبة", c.tax_included as "شامل الضريبة",
-                c.tax_rate as "نسبة الضريبة",
-                COALESCE((SELECT r.payment_method FROM receipts r WHERE r.payment_id = pay.id ORDER BY r.receipt_date DESC LIMIT 1), '-') as "طريقة الدفع"
+            q_tax = '''SELECT t.name as tenant_name, COALESCE(t.region, '-') as region,
+                c.contract_number as contract_number,
+                pay.due_date as due_date, pay.paid_date as paid_date,
+                c.interval_months as interval_months,
+                pay.amount as amount, c.tax_included as tax_included, c.tax_rate as tax_rate,
+                COALESCE((SELECT r.payment_method FROM receipts r WHERE r.payment_id = pay.id ORDER BY r.receipt_date DESC LIMIT 1), '-') as payment_method
                 FROM payments pay JOIN tenants t ON pay.tenant_id=t.id
                 JOIN contracts c ON pay.contract_id=c.id
-                WHERE pay.status='مدفوع' AND pay.paid_date BETWEEN ? AND ?
-                ORDER BY pay.paid_date''',[fd.isoformat(),td.isoformat()])
+                WHERE pay.status='مدفوع' AND pay.paid_date BETWEEN ? AND ?'''
+            params_tax = [fd.isoformat(), td.isoformat()]
+            if rf_tax != "الكل":
+                q_tax += " AND t.region = ?"; params_tax.append(rf_tax)
+            q_tax += " ORDER BY pay.paid_date"
+            cur.execute(q_tax, params_tax)
             rows = cur.fetchall()
+            
             if rows:
-                taxes = []
+                data_tax = []
                 for row in rows:
-                    am = safe_float(row['المبلغ شامل الضريبة']); ti = int(row['شامل الضريبة']); tr = safe_float(row['نسبة الضريبة'])
-                    taxes.append(am*(tr/(1+tr)) if ti == 1 and tr > 0 else (am*tr if ti != 1 else 0))
-                df = pd.DataFrame([list(r) for r in rows], columns=["اسم المستأجر","المنطقة","رقم العقد","بداية الفترة","نهاية الفترة","المبلغ شامل الضريبة","شامل الضريبة","نسبة الضريبة","طريقة الدفع"])
-                df['مبلغ الضريبة'] = taxes
-                df['المبلغ غير شامل الضريبة'] = df['المبلغ شامل الضريبة'] - df['مبلغ الضريبة']
-                df = df[['اسم المستأجر','المنطقة','رقم العقد','بداية الفترة','نهاية الفترة','المبلغ شامل الضريبة','نسبة الضريبة','مبلغ الضريبة','المبلغ غير شامل الضريبة','طريقة الدفع']]
+                    # ✅ حساب بداية ونهاية الفترة من due_date + interval_months
+                    dd = parse_date_safe(row['due_date'])
+                    interval = int(row['interval_months'] or 1)
+                    start_period = dd
+                    end_period = dd + relativedelta(months=interval) - timedelta(days=1)
+                    
+                    am = safe_float(row['amount']); ti = int(row['tax_included']); tr = safe_float(row['tax_rate'])
+                    tax_amt = am*(tr/(1+tr)) if ti == 1 and tr > 0 else (am*tr if ti != 1 else 0)
+                    
+                    data_tax.append({
+                        "اسم المستأجر": row['tenant_name'],
+                        "المنطقة": row['region'],
+                        "رقم العقد": row['contract_number'],
+                        "بداية الفترة": start_period.isoformat(),
+                        "نهاية الفترة": end_period.isoformat(),
+                        "تاريخ السداد": row['paid_date'] or '-',
+                        "المبلغ شامل الضريبة": am,
+                        "نسبة الضريبة": tr,
+                        "مبلغ الضريبة": tax_amt,
+                        "المبلغ غير شامل الضريبة": am - tax_amt,
+                        "طريقة الدفع": row['payment_method'] or '-'
+                    })
+                
+                df = pd.DataFrame(data_tax)
+                # لو هجري: أضف أعمدة هجرية للبداية والنهاية والسداد
+                if cc == "هجري":
+                    df["بداية الفترة (هجري)"] = df["بداية الفترة"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else "")
+                    df["نهاية الفترة (هجري)"] = df["نهاية الفترة"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x else "")
+                    df["تاريخ السداد (هجري)"] = df["تاريخ السداد"].apply(lambda x: gregorian_to_hijri(parse_date_safe(x)) if x and x != '-' else "")
+                    df = df[["اسم المستأجر","المنطقة","رقم العقد",
+                             "بداية الفترة","بداية الفترة (هجري)",
+                             "نهاية الفترة","نهاية الفترة (هجري)",
+                             "تاريخ السداد","تاريخ السداد (هجري)",
+                             "المبلغ شامل الضريبة","نسبة الضريبة","مبلغ الضريبة","المبلغ غير شامل الضريبة","طريقة الدفع"]]
+                else:
+                    df = df[["اسم المستأجر","المنطقة","رقم العقد",
+                             "بداية الفترة","نهاية الفترة","تاريخ السداد",
+                             "المبلغ شامل الضريبة","نسبة الضريبة","مبلغ الضريبة","المبلغ غير شامل الضريبة","طريقة الدفع"]]
+                
                 dfd, sc = display_dataframe_with_reorder(df.copy(), "tax")
                 st.write(f"**إجمالي شامل:** {format_currency(df['المبلغ شامل الضريبة'].sum())}")
                 st.write(f"**الضريبة:** {format_currency(df['مبلغ الضريبة'].sum())}")
