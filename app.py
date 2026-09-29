@@ -370,7 +370,10 @@ def wrap_text_for_pdf(text, n):
 
 DATE_COLUMNS = ['تاريخ الاستحقاق','تاريخ السداد','بداية الفترة','نهاية الفترة','أقدم دفعة غير مسددة']
 
-def export_df_to_pdf(df, title, fname, cols_order=None, extra=None, landscape_mode=False):
+def export_df_to_pdf(df, title, fname, columns_order=None, extra_info=None, landscape_mode=False):
+    # ✅ دعم الأسماء المختلفة للبارامترات
+    cols_order = columns_order
+    extra = extra_info
     if cols_order:
         v = [c for c in cols_order if c in df.columns]; df = df[v] if v else df.copy()
     else: df = df.copy()
@@ -459,7 +462,9 @@ def export_df_to_pdf(df, title, fname, cols_order=None, extra=None, landscape_mo
     orl = "أفقي" if landscape_mode else "عمودي"
     st.download_button(f"تحميل PDF ({orl})", data=buf, file_name=fname, mime="application/pdf")
 
-def export_tax_pdf(df, title, fname, cols_order=None, landscape_mode=True):
+def export_tax_pdf(df, title, fname, columns_order=None, landscape_mode=True):
+    # ✅ دعم الأسماء المختلفة للبارامترات
+    cols_order = columns_order
     if cols_order:
         v = [c for c in cols_order if c in df.columns]; df = df[v] if v else df.copy()
     else: df = df.copy()
@@ -476,6 +481,7 @@ def export_tax_pdf(df, title, fname, cols_order=None, landscape_mode=True):
         elif col in ['بداية الفترة','نهاية الفترة']: widths.append(115)
         elif col in ['اسم المستأجر','المستأجر']: widths.append(140)
         elif col in ['رقم العقد']: widths.append(90)
+        elif col in ['المنطقة']: widths.append(80)
         elif col=='طريقة الدفع': widths.append(85)
         else: widths.append(max(len(reshape_arabic_text(col))*5,75))
     tw = sum(widths); mw = w-40
@@ -893,10 +899,14 @@ def load_receipts():
     return pd.DataFrame([list(r) for r in rows], columns=list(rows[0].keys()))
 
 
+# ============================================================
+# Excel imports (مع معالجة أخطاء واضحة)
+# ============================================================
 def import_tenants_from_excel(f):
     try:
         df = pd.read_excel(f)
-        if "الاسم" not in df.columns: st.error("يجب عمود 'الاسم'"); return
+        if "الاسم" not in df.columns:
+            st.error("❌ يجب أن يحتوي الملف على عمود 'الاسم'"); st.stop()
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT name FROM tenants"); ex = {r['name'] for r in cur.fetchall()}
         ti = []
@@ -909,7 +919,8 @@ def import_tenants_from_excel(f):
                 str(row.get("العنوان","")).strip() if "العنوان" in df.columns else "",
                 str(row.get("المنطقة","")).strip() if "المنطقة" in df.columns else "",
                 str(row.get("ملاحظات","")).strip() if "ملاحظات" in df.columns else ""])
-        if not ti: st.warning("⚠️ لا يوجد صفوف جديدة"); return
+        if not ti:
+            st.warning("⚠️ لا يوجد صفوف جديدة للاستيراد (كل الأسماء موجودة مسبقاً)"); st.stop()
         prog = st.progress(0); stt = st.empty()
         B = 50; batches = [ti[i:i+B] for i in range(0,len(ti),B)]
         sql = 'INSERT INTO tenants (name, phone, national_id, address, region, notes) VALUES (?,?,?,?,?,?)'
@@ -918,13 +929,19 @@ def import_tenants_from_excel(f):
             stt.text(f"📦 دفعة {i}/{len(batches)} ({len(b)} صف)...")
             conn.execute_write_batch([(sql,row) for row in b], is_insert=True); td += len(b); prog.progress(i/len(batches))
         stt.text(""); prog.empty(); st.cache_data.clear()
-        st.success(f"✅ تم استيراد {td} مستأجر"); time.sleep(1); st.rerun()
-    except Exception as e: st.error(f"❌ خطأ: {e}")
+        st.success(f"✅ تم استيراد {td} مستأجر بنجاح")
+        time.sleep(1.5); st.rerun()
+    except Exception as e:
+        st.error(f"❌ خطأ في الاستيراد: {e}")
+        with st.expander("🔍 تفاصيل الخطأ الكامل", expanded=True):
+            st.code(traceback.format_exc())
+        st.stop()
 
 def import_properties_from_excel(f):
     try:
         df = pd.read_excel(f)
-        if "الاسم" not in df.columns: st.error("يجب عمود 'الاسم'"); return
+        if "الاسم" not in df.columns:
+            st.error("❌ يجب أن يحتوي الملف على عمود 'الاسم'"); st.stop()
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT name FROM properties"); ex = {r['name'] for r in cur.fetchall()}
         ti = []
@@ -936,17 +953,23 @@ def import_properties_from_excel(f):
                 str(row.get("العنوان","")).strip() if "العنوان" in df.columns else "",
                 str(row.get("المنطقة","")).strip() if "المنطقة" in df.columns else "",
                 str(row.get("المساحة","")).strip() if "المساحة" in df.columns else ""])
-        if not ti: st.warning("⚠️ لا يوجد صفوف جديدة"); return
+        if not ti:
+            st.warning("⚠️ لا يوجد صفوف جديدة للاستيراد"); st.stop()
         prog = st.progress(0); stt = st.empty()
         B = 50; batches = [ti[i:i+B] for i in range(0,len(ti),B)]
         sql = 'INSERT INTO properties (name, description, address, region, area) VALUES (?,?,?,?,?)'
         td = 0
         for i,b in enumerate(batches,1):
-            stt.text(f"📦 دفعة {i}/{len(batches)}...")
+            stt.text(f"📦 دفعة {i}/{len(batches)} ({len(b)} صف)...")
             conn.execute_write_batch([(sql,row) for row in b], is_insert=True); td += len(b); prog.progress(i/len(batches))
         stt.text(""); prog.empty(); st.cache_data.clear()
-        st.success(f"✅ تم استيراد {td} عقار"); time.sleep(1); st.rerun()
-    except Exception as e: st.error(f"❌ خطأ: {e}")
+        st.success(f"✅ تم استيراد {td} عقار بنجاح")
+        time.sleep(1.5); st.rerun()
+    except Exception as e:
+        st.error(f"❌ خطأ في الاستيراد: {e}")
+        with st.expander("🔍 تفاصيل الخطأ الكامل", expanded=True):
+            st.code(traceback.format_exc())
+        st.stop()
 
 def parse_excel_date(v):
     if v is None or pd.isna(v): return None
@@ -978,7 +1001,10 @@ def import_contracts_from_excel(f):
     try:
         df = pd.read_excel(f, sheet_name=0)
         for col in ["اسم المستأجر","اسم العقار","تاريخ البداية","تاريخ النهاية"]:
-            if col not in df.columns: st.error(f"يجب عمود '{col}'"); return
+            if col not in df.columns:
+                st.error(f"❌ يجب أن يحتوي الملف على عمود '{col}'")
+                st.info(f"📋 الأعمدة الموجودة في الملف: {', '.join(df.columns.tolist())}")
+                st.stop()
         conn = get_conn(); cur = conn.cursor()
         cur.execute("SELECT id, name FROM tenants"); tdata = cur.fetchall()
         cur.execute("SELECT id, name FROM properties"); pdata = cur.fetchall()
@@ -1019,7 +1045,7 @@ def import_contracts_from_excel(f):
                     if pnc.get(pn,0)>1: errs.append(f"صف {idx+2}: يوجد أكثر من عقار باسم '{pn}'"); continue
                     pid = pni[pn]
                 sd = parse_excel_date(row.get("تاريخ البداية",None)); ed = parse_excel_date(row.get("تاريخ النهاية",None))
-                if sd is None or ed is None: errs.append(f"صف {idx+2}: تواريخ غير صحيحة"); continue
+                if sd is None or ed is None: errs.append(f"صف {idx+2}: تواريخ غير صحيحة (بداية: {row.get('تاريخ البداية')}، نهاية: {row.get('تاريخ النهاية')})"); continue
                 if sd >= ed: errs.append(f"صف {idx+2}: البداية بعد النهاية"); continue
                 ra = safe_float(row.get("قيمة الإيجار السنوي",0))
                 im = int(row.get("دورية السداد (شهور)",1)) if "دورية السداد (شهور)" in df.columns else 1
@@ -1037,13 +1063,21 @@ def import_contracts_from_excel(f):
                 imp += 1
             except Exception as e: errs.append(f"صف {idx+2}: {str(e)}")
         st.cache_data.clear()
-        msg = f"✅ تم استيراد {imp} عقد"
-        if errs: msg += f" — فشل {len(errs)}"
-        st.toast(msg, icon="✅")
+        msg = f"✅ تم استيراد {imp} عقد بنجاح"
+        if errs: msg += f" — فشل {len(errs)} صف"
+        st.success(msg)
         if errs:
-            with st.expander(f"⚠️ الأخطاء ({len(errs)})", expanded=True):
-                for er in errs[:30]: st.text(er)
-    except Exception as e: st.error(f"خطأ: {e}")
+            st.warning(f"⚠️ فشل {len(errs)} صف — راجع التفاصيل بالأسفل")
+            with st.expander(f"🔍 تفاصيل الأخطاء ({len(errs)})", expanded=True):
+                for er in errs[:50]: st.text(er)
+            st.stop()
+        else:
+            time.sleep(1.5); st.rerun()
+    except Exception as e:
+        st.error(f"❌ خطأ في الاستيراد: {e}")
+        with st.expander("🔍 تفاصيل الخطأ الكامل", expanded=True):
+            st.code(traceback.format_exc())
+        st.stop()
 
 
 def add_user(u, p, r):
@@ -1163,7 +1197,6 @@ def update_receipt(rid,rn,tid,cid,pid,amt,rd,pm,nt,att):
     st.cache_data.clear(); return True, "تم التعديل"
 
 def update_payment(pid, dd, amt, stt, nt):
-    """✅ تعديل دفعة مباشرة"""
     cur = get_conn().cursor()
     cur.execute("SELECT amount, paid_amount FROM payments WHERE id=?",[pid]); old = cur.fetchone()
     if not old: return False, "غير موجودة"
@@ -1422,7 +1455,7 @@ elif menu == "إدارة البيانات":
                 st.download_button("تحميل قالب العقود", data=o.getvalue(), file_name="قالب_العقود.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="dl_tmpl_c")
             with ci2:
                 uf = st.file_uploader("استيراد", type=["xlsx","xls"], key="imp_c")
-                if uf and st.button("تنفيذ", key="btn_imp_c"): import_contracts_from_excel(uf); st.rerun()
+                if uf and st.button("تنفيذ", key="btn_imp_c"): import_contracts_from_excel(uf)
             if st.button("➕ إضافة عقد", key="btn_add_c"): st.session_state['show_add_c'] = True
             if st.session_state.get('show_add_c'):
                 at = get_active_tenants()
@@ -2044,24 +2077,28 @@ elif menu == "التقارير":
             else:
                 c1,c2 = st.columns(2)
                 fd = c1.date_input("من", value=date.today().replace(day=1), key="tx_d1"); td = c2.date_input("إلى", value=date.today(), key="tx_d2")
+            # ✅ الحل: نستخدم Subquery بدل JOIN + نضيف المنطقة
             cur = get_conn().cursor()
-            cur.execute('''SELECT t.name as "اسم المستأجر", c.contract_number as "رقم العقد",
+            cur.execute('''SELECT t.name as "اسم المستأجر", COALESCE(t.region, '-') as "المنطقة",
+                c.contract_number as "رقم العقد",
                 c.start_date as "بداية الفترة", c.end_date as "نهاية الفترة",
                 pay.amount as "المبلغ شامل الضريبة", c.tax_included as "شامل الضريبة",
-                c.tax_rate as "نسبة الضريبة", r.payment_method as "طريقة الدفع"
+                c.tax_rate as "نسبة الضريبة",
+                COALESCE((SELECT r.payment_method FROM receipts r WHERE r.payment_id = pay.id ORDER BY r.receipt_date DESC LIMIT 1), '-') as "طريقة الدفع"
                 FROM payments pay JOIN tenants t ON pay.tenant_id=t.id
-                JOIN contracts c ON pay.contract_id=c.id LEFT JOIN receipts r ON r.payment_id=pay.id
-                WHERE pay.status='مدفوع' AND pay.paid_date BETWEEN ? AND ? ORDER BY pay.paid_date''',[fd.isoformat(),td.isoformat()])
+                JOIN contracts c ON pay.contract_id=c.id
+                WHERE pay.status='مدفوع' AND pay.paid_date BETWEEN ? AND ?
+                ORDER BY pay.paid_date''',[fd.isoformat(),td.isoformat()])
             rows = cur.fetchall()
             if rows:
                 taxes = []
                 for row in rows:
                     am = safe_float(row['المبلغ شامل الضريبة']); ti = int(row['شامل الضريبة']); tr = safe_float(row['نسبة الضريبة'])
                     taxes.append(am*(tr/(1+tr)) if ti == 1 and tr > 0 else (am*tr if ti != 1 else 0))
-                df = pd.DataFrame([list(r) for r in rows], columns=["اسم المستأجر","رقم العقد","بداية الفترة","نهاية الفترة","المبلغ شامل الضريبة","شامل الضريبة","نسبة الضريبة","طريقة الدفع"])
+                df = pd.DataFrame([list(r) for r in rows], columns=["اسم المستأجر","المنطقة","رقم العقد","بداية الفترة","نهاية الفترة","المبلغ شامل الضريبة","شامل الضريبة","نسبة الضريبة","طريقة الدفع"])
                 df['مبلغ الضريبة'] = taxes
                 df['المبلغ غير شامل الضريبة'] = df['المبلغ شامل الضريبة'] - df['مبلغ الضريبة']
-                df = df[['اسم المستأجر','رقم العقد','بداية الفترة','نهاية الفترة','المبلغ شامل الضريبة','نسبة الضريبة','مبلغ الضريبة','المبلغ غير شامل الضريبة','طريقة الدفع']]
+                df = df[['اسم المستأجر','المنطقة','رقم العقد','بداية الفترة','نهاية الفترة','المبلغ شامل الضريبة','نسبة الضريبة','مبلغ الضريبة','المبلغ غير شامل الضريبة','طريقة الدفع']]
                 dfd, sc = display_dataframe_with_reorder(df.copy(), "tax")
                 st.write(f"**إجمالي شامل:** {format_currency(df['المبلغ شامل الضريبة'].sum())}")
                 st.write(f"**الضريبة:** {format_currency(df['مبلغ الضريبة'].sum())}")
